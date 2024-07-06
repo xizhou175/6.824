@@ -459,13 +459,15 @@ func (rf *Raft) newElection() {
         // check if we already achieved machority
         if numGranted > len(rf.peers) / 2 {
             rf.mu.Lock()
-            DPrintf("(Raft %v -=Election=-)\t Majority achieved", rf.me)
+            //DPrintf("(Raft %v -=Election=-)\t Majority achieved", rf.me)
+
+            //fmt.Printf("(Raft %v -=Election=-)\t Majority achieved\n", rf.me)
 
             rf.state = LEADER
 
             rf.mu.Unlock()
 
-            rf.sendHeartBeats()
+            //rf.sendHeartBeats()
             break
         }
     }
@@ -544,19 +546,17 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func(rf *Raft) sendLogEntries() {
-    mu := sync.Mutex{}
-    cond := sync.NewCond(&mu)
+    var commitCh = make(chan int)
 
     go func() {
         commitNum := 0
         for commitNum <= len(rf.peers) / 2 {
-            cond.L.Lock()
-            cond.Wait()
-            commitNum += 1
+            committed := <- commitCh
+            commitNum += committed
             //fmt.Printf("commitNum: %v\n", commitNum)
-            cond.L.Unlock()
         }
 
+        //fmt.Printf("Leader ready to apply messages, majority committed: %v\n", commitNum )
         rf.mu.Lock()
         rf.commitIndex = len(rf.log) - 1
         for rf.lastApplied < rf.commitIndex {
@@ -568,9 +568,9 @@ func(rf *Raft) sendLogEntries() {
             applyMsg.CommandIndex = rf.lastApplied
             *(rf.applyCh) <- applyMsg
         }
-        rf.sendHeartBeats()
-        fmt.Printf("Leader applied, commitIndex: %v\n", rf.commitIndex)
         rf.mu.Unlock()
+        //fmt.Printf("Leader applied, commitIndex: %v\n", rf.commitIndex)
+        rf.sendHeartBeats()
     }()
 
     for i, _ := range rf.peers {
@@ -586,8 +586,9 @@ func(rf *Raft) sendLogEntries() {
             req.LeaderCommit = rf.commitIndex
             rf.mu.Unlock()
 
-            reply := AppendEntriesReply{0, false}
-            for reply.Success == false {
+            success := false
+            for success == false {
+                reply := AppendEntriesReply{0, false}
                 req.PrevLogIndex = rf.nextIndex[index] - 1
                 req.PrevLogTerm = rf.log[req.PrevLogIndex].Term
 
@@ -606,13 +607,15 @@ func(rf *Raft) sendLogEntries() {
                 rf.mu.Unlock()
 
                 if reply.Success == false {
-                    rf.nextIndex[index] -= 1
+                    if rf.nextIndex[index] > 1 {
+                        rf.nextIndex[index] -= 1
+                    }
+                    success = false
                 } else {
                     rf.nextIndex[index] = len(rf.log)
-                    //fmt.Printf("server %v committed\n", index)
-                    cond.L.Lock()
-                    cond.Signal()
-                    cond.L.Unlock()
+                    //fmt.Printf("server %v committed, commitIndex: %v\n", index, len(rf.log)-1)
+                    commitCh <- 1
+                    success = true
                 }
             }
         }(i)
