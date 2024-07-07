@@ -97,6 +97,8 @@ type Raft struct {
     logmu            sync.Mutex
     cond             sync.Cond
     applyCh          *chan ApplyMsg
+
+    connected        []bool
 }
 
 // return currentTerm and whether this server
@@ -225,19 +227,25 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
     rf.mu.Lock()
     defer rf.mu.Unlock()
+    lastLogTerm := rf.log[len(rf.log) - 1].Term
     reply.VoteGranted = false
     if args.Term < rf.currentTerm {
         reply.Term = rf.currentTerm
         return
-    } else if args.Term > rf.currentTerm {
-        rf.state = FOLLOWER
-        rf.votedFor = args.CandidateId
-        rf.currentTerm = args.Term
-        reply.VoteGranted = true
-    } else if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-        rf.state = FOLLOWER
-        rf.votedFor = args.CandidateId
-        reply.VoteGranted = true
+    }
+
+    // Election restriction
+    if lastLogTerm < args.LastLogTerm || (lastLogTerm == args.LastLogTerm && args.LastLogIndex >= len(rf.log) - 1){
+        if args.Term > rf.currentTerm {
+            rf.state = FOLLOWER
+            rf.votedFor = args.CandidateId
+            rf.currentTerm = args.Term
+            reply.VoteGranted = true
+        } else if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+            rf.state = FOLLOWER
+            rf.votedFor = args.CandidateId
+            reply.VoteGranted = true
+        }
     }
 
     reply.Term = args.Term
@@ -424,6 +432,8 @@ func (rf *Raft) newElection() {
     req := RequestVoteArgs{}
     req.Term = rf.currentTerm
     req.CandidateId = rf.me
+    req.LastLogTerm = rf.log[len(rf.log) - 1].Term
+    req.LastLogIndex = len(rf.log) - 1
     rf.mu.Unlock()
 
     var voteCh = make(chan int)
@@ -461,13 +471,13 @@ func (rf *Raft) newElection() {
             rf.mu.Lock()
             //DPrintf("(Raft %v -=Election=-)\t Majority achieved", rf.me)
 
-            //fmt.Printf("(Raft %v -=Election=-)\t Majority achieved\n", rf.me)
+            fmt.Printf("(Raft %v -=Election=-)\t Majority achieved\n", rf.me)
 
             rf.state = LEADER
 
             rf.mu.Unlock()
 
-            //rf.sendHeartBeats()
+            rf.sendHeartBeats()
             break
         }
     }
@@ -549,11 +559,17 @@ func(rf *Raft) sendLogEntries() {
     var commitCh = make(chan int)
 
     go func() {
-        commitNum := 0
-        for commitNum <= len(rf.peers) / 2 {
+        commitNum := 1
+        connectedServer := len(rf.peers)
+        for commitNum <= connectedServer / 2 {
             committed := <- commitCh
             commitNum += committed
-            //fmt.Printf("commitNum: %v\n", commitNum)
+
+            if committed == 0 {
+                connectedServer--
+            }
+
+            //fmt.Printf("commitNum: %v connected servers: %v\n", commitNum, connectedServer )
         }
 
         //fmt.Printf("Leader ready to apply messages, majority committed: %v\n", commitNum )
@@ -569,7 +585,7 @@ func(rf *Raft) sendLogEntries() {
             *(rf.applyCh) <- applyMsg
         }
         rf.mu.Unlock()
-        //fmt.Printf("Leader applied, commitIndex: %v\n", rf.commitIndex)
+        fmt.Printf("Leader: server %v applied, commitIndex: %v\n", rf.me, rf.commitIndex)
         rf.sendHeartBeats()
     }()
 
@@ -593,9 +609,20 @@ func(rf *Raft) sendLogEntries() {
                 req.PrevLogTerm = rf.log[req.PrevLogIndex].Term
 
                 req.Entries = rf.log[rf.nextIndex[index]:]
-                rf.sendAppendEntries(index, &req, &reply)
+                ok := rf.sendAppendEntries(index, &req, &reply)
+
+                if !ok {
+                    fmt.Printf("server %v dropped out\n", index)
+                    commitCh <- 0
+                    //rf.mu.Lock()
+                    //rf.connected[index] = false
+                    //rf.mu.Unlock()
+                    break
+                }
 
                 rf.mu.Lock()
+                //fmt.Printf("server %v connected\n", index)
+                //rf.connected[index] = true
                 if reply.Term > rf.currentTerm {
                     DPrintf( "server %v transitioned to FOLLOWER\n", rf.me )
                     rf.state = FOLLOWER
@@ -643,16 +670,25 @@ func (rf *Raft) sendHeartBeats() {
 
 
             reply := AppendEntriesReply{}
-            rf.sendAppendEntries(index, &req, &reply)
+            ok := rf.sendAppendEntries(index, &req, &reply)
 
-            rf.mu.Lock()
-            if reply.Term > rf.currentTerm {
-                DPrintf( "server %v transitioned to FOLLOWER\n", rf.me )
-                rf.state = FOLLOWER
-                rf.votedFor = -1
-                rf.currentTerm = reply.Term
+            if ok {
+                rf.mu.Lock()
+                if reply.Term > rf.currentTerm {
+                    DPrintf( "server %v transitioned to FOLLOWER\n", rf.me )
+                    rf.state = FOLLOWER
+                    rf.votedFor = -1
+                    rf.currentTerm = reply.Term
+                }
+
+                //rf.connected[index] = true
+                rf.mu.Unlock()
+            } else {
+                //fmt.Printf("server %v dropped out\n", index)
+                //rf.mu.Lock()
+                //rf.connected[index] = false
+                //rf.mu.Unlock()
             }
-            rf.mu.Unlock()
         }(i)
     }
 }
@@ -694,6 +730,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
         rf.nextIndex[i] = 1
     }
     rf.matchIndex = make([]int, len(peers))
+
+    rf.connected = make([]bool, len(peers))
+    for i := 0; i < len(peers); i++ {
+        rf.connected[i] = true
+    }
 
     rf.cond = *sync.NewCond(&(rf.logmu))
     rf.applyCh = &applyCh
