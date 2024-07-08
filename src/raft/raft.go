@@ -230,7 +230,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
     lastLogTerm := rf.log[len(rf.log) - 1].Term
     reply.VoteGranted = false
 
-    fmt.Printf("server %v term %v, args.term %v\n", rf.me, rf.currentTerm, args.Term)
+    //fmt.Printf("server %v term %v, args.term %v\n", rf.me, rf.currentTerm, args.Term)
     if args.Term < rf.currentTerm {
         reply.Term = rf.currentTerm
         return
@@ -458,9 +458,9 @@ func (rf *Raft) newElection() {
             //DPrintf( "server %v requesting vote from server %v for term %v\n", rf.me, index, req.Term )
             ok := rf.sendRequestVote(index, &req, &reply)
 
-            rf.mu.Lock()
+            //rf.mu.Lock()
 			gotTheVote := ok && reply.VoteGranted && reply.Term == term
-			rf.mu.Unlock()
+			//rf.mu.Unlock()
 
             //DPrintf( "server %v requesting vote from server %v for term %v, ok: %t\n", rf.me, index, req.Term, gotTheVote )
             if gotTheVote {
@@ -600,7 +600,7 @@ func(rf *Raft) sendLogEntries() {
             *(rf.applyCh) <- applyMsg
         }
         rf.mu.Unlock()
-        fmt.Printf("Leader: server %v applied %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.commitIndex)
+        //fmt.Printf("Leader: server %v applied %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.commitIndex)
         rf.apply()
     }()
 
@@ -643,7 +643,7 @@ func(rf *Raft) sendLogEntries() {
                     rf.state = FOLLOWER
                     rf.votedFor = -1
                     rf.currentTerm = reply.Term
-                    commitCh <- 0
+                    commitCh <- -1
                     rf.mu.Unlock()
                     break
                 }
@@ -732,7 +732,7 @@ func (rf *Raft) ApplyMsg(args *AppendEntriesArgs, reply *AppendEntriesReply) {
             applyMsg.Command = entry.Data
             applyMsg.CommandIndex = rf.lastApplied
             *(rf.applyCh) <- applyMsg
-            fmt.Printf("server %v applied data %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.lastApplied)
+            //fmt.Printf("server %v applied data %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.lastApplied)
         }
     }
 
@@ -747,21 +747,27 @@ func (rf *Raft) sendApplyMsg(server int, args *AppendEntriesArgs, reply *AppendE
 
 func (rf *Raft) apply() {
     for i := 0; i < len(rf.peers); i++ {
-        rf.mu.Lock()
-        req := AppendEntriesArgs{}
-        req.Term = rf.currentTerm
-        req.LeaderId = rf.me
-        req.LeaderCommit = rf.commitIndex
-        req.PrevLogIndex = rf.nextIndex[i] - 1
-        req.PrevLogTerm = rf.log[req.PrevLogIndex].Term
+        if i == rf.me {
+            continue
+        }
 
-        //fmt.Printf("sending prevlogindex: %v, args.term: %v\n", req.PrevLogIndex, req.PrevLogTerm )
-        rf.mu.Unlock()
+        go func(index int) {
+            rf.mu.Lock()
+            req := AppendEntriesArgs{}
+            req.Term = rf.currentTerm
+            req.LeaderId = rf.me
+            req.LeaderCommit = rf.commitIndex
+            req.PrevLogIndex = rf.nextIndex[index] - 1
+            req.PrevLogTerm = rf.log[req.PrevLogIndex].Term
+
+            //fmt.Printf("sending prevlogindex: %v, args.term: %v\n", req.PrevLogIndex, req.PrevLogTerm )
+            rf.mu.Unlock()
 
 
-        reply := AppendEntriesReply{}
+            reply := AppendEntriesReply{}
 
-        rf.sendApplyMsg(i, &req, &reply)
+            rf.sendApplyMsg(index, &req, &reply)
+        }(i)
     }
 }
 
