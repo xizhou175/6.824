@@ -538,28 +538,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
                     rf.log = append(rf.log, args.Entries[index])
                     index += 1
                 }
-            } //else if args.PrevLogIndex != 0 {
-              //  rf.log = rf.log[0 : args.PrevLogIndex+1]
-              //  for j := args.PrevLogIndex + 1; j < len(rf.log); j++ {
-              //      rf.log[j].Term = 0
-              //  }
-            //}
-            if rf.commitIndex < args.LeaderCommit {
-                if args.LeaderCommit < len(rf.log) - 1 {
-                    rf.commitIndex = args.LeaderCommit
-                } else {
-                    rf.commitIndex = len(rf.log) - 1
-                }
-                for rf.lastApplied < rf.commitIndex {
-                    rf.lastApplied++
-                    entry := rf.log[rf.lastApplied]
-                    applyMsg := ApplyMsg{}
-                    applyMsg.CommandValid = true
-                    applyMsg.Command = entry.Data
-                    applyMsg.CommandIndex = rf.lastApplied
-                    *(rf.applyCh) <- applyMsg
-                    //fmt.Printf("server %v applied data %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.lastApplied)
-                }
             }
         } else {
             reply.Success = false
@@ -617,8 +595,8 @@ func(rf *Raft) sendLogEntries() {
             *(rf.applyCh) <- applyMsg
         }
         rf.mu.Unlock()
-        fmt.Printf("Leader: server %v applied %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.commitIndex)
-        rf.sendHeartBeats()
+        //fmt.Printf("Leader: server %v applied %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.commitIndex)
+        rf.apply()
     }()
 
     for i, _ := range rf.peers {
@@ -731,7 +709,57 @@ func (rf *Raft) sendHeartBeats() {
     }
 }
 
-//
+func (rf *Raft) ApplyMsg(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
+
+    if rf.commitIndex < args.LeaderCommit {
+        if args.LeaderCommit < len(rf.log) - 1 {
+            rf.commitIndex = args.LeaderCommit
+        } else {
+            rf.commitIndex = len(rf.log) - 1
+        }
+        for rf.lastApplied < rf.commitIndex {
+            rf.lastApplied++
+            entry := rf.log[rf.lastApplied]
+            applyMsg := ApplyMsg{}
+            applyMsg.CommandValid = true
+            applyMsg.Command = entry.Data
+            applyMsg.CommandIndex = rf.lastApplied
+            *(rf.applyCh) <- applyMsg
+            //fmt.Printf("server %v applied data %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.lastApplied)
+        }
+    }
+
+    rf.lastAE = time.Now()
+
+}
+
+func (rf *Raft) sendApplyMsg(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+    ok := rf.peers[server].Call("Raft.ApplyMsg", args, reply)
+	return ok
+}
+
+func (rf *Raft) apply() {
+    for i := 0; i < len(rf.peers); i++ {
+        rf.mu.Lock()
+        req := AppendEntriesArgs{}
+        req.Term = rf.currentTerm
+        req.LeaderId = rf.me
+        req.LeaderCommit = rf.commitIndex
+        req.PrevLogIndex = rf.nextIndex[i] - 1
+        req.PrevLogTerm = rf.log[req.PrevLogIndex].Term
+
+        //fmt.Printf("sending prevlogindex: %v, args.term: %v\n", req.PrevLogIndex, req.PrevLogTerm )
+        rf.mu.Unlock()
+
+
+        reply := AppendEntriesReply{}
+
+        rf.sendApplyMsg(i, &req, &reply)
+    }
+}
+
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
 // server's port is peers[me]. all the servers' peers[] arrays
