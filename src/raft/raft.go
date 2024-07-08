@@ -229,12 +229,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
     defer rf.mu.Unlock()
     lastLogTerm := rf.log[len(rf.log) - 1].Term
     reply.VoteGranted = false
+
+    fmt.Printf("server %v term %v, args.term %v\n", rf.me, rf.currentTerm, args.Term)
     if args.Term < rf.currentTerm {
         reply.Term = rf.currentTerm
         return
     }
 
-    //fmt.Printf("server %v term %v, args.term %v\n", rf.me, rf.currentTerm, args.Term)
 
     // Election restriction
     if lastLogTerm < args.LastLogTerm || (lastLogTerm == args.LastLogTerm && args.LastLogIndex >= len(rf.log) - 1){
@@ -247,6 +248,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
             rf.state = FOLLOWER
             rf.votedFor = args.CandidateId
             reply.VoteGranted = true
+        } else {
+            fmt.Printf("server %v refused to vote, has voted for: %v\n", rf.me, rf.votedFor)
         }
     } else {
         //fmt.Printf("election restriction check failed. server %v refused to vote\n", rf.me)
@@ -432,12 +435,13 @@ func (rf *Raft) newElection() {
     rf.mu.Lock()
     rf.state = CANDIDATE
     rf.votedFor = rf.me
-    rf.currentTerm += 1
+    //rf.currentTerm += 1
+    term := rf.currentTerm + 1
     //DPrintf( "server %v is starting a leader election for term %v\n", rf.me, rf.currentTerm )
 
-    fmt.Printf( "server %v is starting a leader election for term %v\n", rf.me, rf.currentTerm )
+    //fmt.Printf( "server %v is starting a leader election for term %v\n", rf.me, term )
     req := RequestVoteArgs{}
-    req.Term = rf.currentTerm
+    req.Term = term
     req.CandidateId = rf.me
     req.LastLogTerm = rf.log[len(rf.log) - 1].Term
     req.LastLogIndex = len(rf.log) - 1
@@ -455,7 +459,7 @@ func (rf *Raft) newElection() {
             ok := rf.sendRequestVote(index, &req, &reply)
 
             rf.mu.Lock()
-			gotTheVote := ok && reply.VoteGranted && reply.Term == rf.currentTerm
+			gotTheVote := ok && reply.VoteGranted && reply.Term == term
 			rf.mu.Unlock()
 
             //DPrintf( "server %v requesting vote from server %v for term %v, ok: %t\n", rf.me, index, req.Term, gotTheVote )
@@ -481,6 +485,7 @@ func (rf *Raft) newElection() {
             fmt.Printf("(Raft %v -=Election=-)\t Majority achieved\n", rf.me)
 
             rf.state = LEADER
+            rf.currentTerm = term
             for j := 0; j < len(rf.peers); j++ {
                 rf.nextIndex[j] = len(rf.log)
             }
@@ -595,7 +600,7 @@ func(rf *Raft) sendLogEntries() {
             *(rf.applyCh) <- applyMsg
         }
         rf.mu.Unlock()
-        //fmt.Printf("Leader: server %v applied %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.commitIndex)
+        fmt.Printf("Leader: server %v applied %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.commitIndex)
         rf.apply()
     }()
 
@@ -727,7 +732,7 @@ func (rf *Raft) ApplyMsg(args *AppendEntriesArgs, reply *AppendEntriesReply) {
             applyMsg.Command = entry.Data
             applyMsg.CommandIndex = rf.lastApplied
             *(rf.applyCh) <- applyMsg
-            //fmt.Printf("server %v applied data %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.lastApplied)
+            fmt.Printf("server %v applied data %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.lastApplied)
         }
     }
 
