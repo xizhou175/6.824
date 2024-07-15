@@ -242,7 +242,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         if args.Term > rf.currentTerm {
             rf.state = FOLLOWER
             rf.votedFor = args.CandidateId
-            rf.currentTerm = args.Term
+            //rf.currentTerm = args.Term
             reply.VoteGranted = true
         } else if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
             rf.state = FOLLOWER
@@ -567,7 +567,7 @@ func(rf *Raft) sendLogEntries() {
 
     go func() {
         commitNum := 1
-        connectedServer := len(rf.peers)
+        /*connectedServer := len(rf.peers)
         for commitNum <= connectedServer / 2 {
             committed := <- commitCh
             commitNum += committed
@@ -577,9 +577,25 @@ func(rf *Raft) sendLogEntries() {
             }
 
             //fmt.Printf("commitNum: %v connected servers: %v\n", commitNum, connectedServer )
+        }*/
+
+        connectedServer := 1
+        for i := 0; i < len(rf.peers) - 1; i++ {
+            committed := <- commitCh
+
+            if committed != 0 {
+                commitNum++
+                connectedServer++
+            }
+
+            if commitNum > len(rf.peers) / 2 {
+                break
+            }
+            //fmt.Printf("commitNum: %v connected servers: %v\n", commitNum, connectedServer )
         }
 
-        if connectedServer <= len(rf.peers) / 2 {
+        //fmt.Printf( "connectedServer: %v server: %v state: %v\n", connectedServer, rf.me, rf.state )
+        if connectedServer <= len(rf.peers) / 2 || commitNum <= connectedServer / 2 {
             return
         }
 
@@ -598,9 +614,9 @@ func(rf *Raft) sendLogEntries() {
             applyMsg.Command = entry.Data
             applyMsg.CommandIndex = rf.lastApplied
             *(rf.applyCh) <- applyMsg
+            //fmt.Printf("Leader: server %v applied %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.commitIndex)
         }
         rf.mu.Unlock()
-        //fmt.Printf("Leader: server %v applied %v, commitIndex: %v\n", rf.me, rf.log[rf.lastApplied], rf.commitIndex)
         rf.apply()
     }()
 
