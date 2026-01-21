@@ -8,19 +8,23 @@ package raft
 // test with the original before submitting.
 //
 
-import "6.824/labgob"
-import "6.824/labrpc"
-import "bytes"
-import "log"
-import "sync"
-import "testing"
-import "runtime"
-import "math/rand"
-import crand "crypto/rand"
-import "math/big"
-import "encoding/base64"
-import "time"
-import "fmt"
+import (
+	"bytes"
+	"log"
+	"math/rand"
+	"runtime"
+	"sync"
+	"testing"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+
+	crand "crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"math/big"
+	"time"
+)
 
 func randstring(n int) string {
 	b := make([]byte, 2*n)
@@ -133,6 +137,21 @@ func (cfg *config) crash1(i int) {
 	}
 }
 
+func (cfg *config) printLog(i int) {
+	fmt.Printf("%v: log %v\n", i, cfg.logs[i])
+}
+
+func (cfg *config) printAllLogs() {
+	fmt.Printf("======all logs=====\n")
+	for i := 0; i < len(cfg.logs); i++ {
+		cfg.printLog(i)
+		if i != len(cfg.logs)-1 {
+			fmt.Printf("-----------------\n")
+		}
+	}
+	fmt.Printf("===================\n")
+}
+
 func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 	err_msg := ""
 	v := m.Command
@@ -145,6 +164,7 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 		}
 	}
 	_, prevok := cfg.logs[i][m.CommandIndex-1]
+	//DPrintf("(Raft %v -=applier=-)\t %v(%v)", i, m.Command, m.CommandIndex)
 	cfg.logs[i][m.CommandIndex] = v
 	if m.CommandIndex > cfg.maxIndex {
 		cfg.maxIndex = m.CommandIndex
@@ -230,13 +250,11 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	}
 }
 
-//
 // start or re-start a Raft.
 // if one already exists, "kill" it first.
 // allocate new outgoing port file names, and a new
 // state persister, to isolate previous instance of
 // this server. since we cannot really kill it.
-//
 func (cfg *config) start1(i int, applier func(int, chan ApplyMsg)) {
 	cfg.crash1(i)
 
@@ -524,6 +542,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			// somebody claimed to be the leader and to have
 			// submitted our command; wait a while for agreement.
 			t1 := time.Now()
+			//old_nd := 0
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
 				if nd > 0 && nd >= expectedServers {
@@ -533,6 +552,11 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 						return index
 					}
 				}
+				//fmt.Printf("nd: %v %v\n", nd, index)
+				//if nd != old_nd {
+				//	DPrintf("nd: %v\n", nd)
+				//}
+				//old_nd = nd
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {

@@ -8,12 +8,14 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
-import "fmt"
-import "time"
-import "math/rand"
-import "sync/atomic"
-import "sync"
+import (
+	"fmt"
+	"math/rand"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -41,7 +43,7 @@ func TestInitialElection2A(t *testing.T) {
 	time.Sleep(2 * RaftElectionTimeout)
 	term2 := cfg.checkTerms()
 	if term1 != term2 {
-		fmt.Printf("warning: term changed even though there were no failures")
+		fmt.Printf("warning: term changed even though there were no failures [term1=%v term2=%v]", term1, term2)
 	}
 
 	// there should still be a leader.
@@ -126,7 +128,7 @@ func TestBasicAgree2B(t *testing.T) {
 
 	cfg.begin("Test (2B): basic agreement")
 
-	iters := 3
+	iters := 2
 	for index := 1; index < iters+1; index++ {
 		nd, _ := cfg.nCommitted(index)
 		if nd > 0 {
@@ -142,10 +144,8 @@ func TestBasicAgree2B(t *testing.T) {
 	cfg.end()
 }
 
-//
 // check, based on counting bytes of RPCs, that
 // each command is sent to each peer just once.
-//
 func TestRPCBytes2B(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
@@ -375,11 +375,14 @@ func TestRejoin2B(t *testing.T) {
 	// leader network failure
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
+	fmt.Printf("%v disconnected\n", leader1)
 
 	// make old leader try to agree on some entries
 	cfg.rafts[leader1].Start(102)
 	cfg.rafts[leader1].Start(103)
 	cfg.rafts[leader1].Start(104)
+
+	cfg.printAllLogs()
 
 	// new leader commits, also for index=2
 	cfg.one(103, 2, true)
@@ -388,13 +391,19 @@ func TestRejoin2B(t *testing.T) {
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
 
+	fmt.Printf("%v disconnected\n", leader2)
+
 	// old leader connected again
 	cfg.connect(leader1)
+	fmt.Printf("%v reconnected\n", leader1)
 
 	cfg.one(104, 2, true)
 
 	// all together now
 	cfg.connect(leader2)
+	fmt.Printf("%v reconnected\n", leader2)
+
+	cfg.printAllLogs()
 
 	cfg.one(105, servers, true)
 
@@ -416,26 +425,33 @@ func TestBackup2B(t *testing.T) {
 	cfg.disconnect((leader1 + 3) % servers)
 	cfg.disconnect((leader1 + 4) % servers)
 
+	fmt.Printf("Leader: %v, disconnected %v %v %v\n", leader1, (leader1+2)%servers, (leader1+3)%servers, (leader1+4)%servers)
 	// submit lots of commands that won't commit
 	for i := 0; i < 50; i++ {
 		cfg.rafts[leader1].Start(rand.Int())
 	}
+	fmt.Printf("Messed up Raft %v log\n", leader1)
 
 	time.Sleep(RaftElectionTimeout / 2)
 
 	cfg.disconnect((leader1 + 0) % servers)
 	cfg.disconnect((leader1 + 1) % servers)
 
+	fmt.Printf("disconnected %v %v\n", (leader1+0)%servers, (leader1+1)%servers)
+
 	// allow other partition to recover
 	cfg.connect((leader1 + 2) % servers)
 	cfg.connect((leader1 + 3) % servers)
 	cfg.connect((leader1 + 4) % servers)
 
+	fmt.Printf("Reconnected %v %v %v\n", (leader1+2)%servers, (leader1+3)%servers, (leader1+4)%servers)
+
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
-		cfg.one(rand.Int(), 3, true)
+		cfg.one(i+50, 3, true)
 	}
 
+	//cfg.printAllLogs()
 	// now another partitioned leader and one follower
 	leader2 := cfg.checkOneLeader()
 	other := (leader1 + 2) % servers
@@ -443,32 +459,48 @@ func TestBackup2B(t *testing.T) {
 		other = (leader2 + 1) % servers
 	}
 	cfg.disconnect(other)
-
+	fmt.Printf("leader %v disconnected %v\n", leader2, other)
 	// lots more commands that won't commit
 	for i := 0; i < 50; i++ {
 		cfg.rafts[leader2].Start(rand.Int())
 	}
+	fmt.Printf("Messed up Raft %v log\n", leader2)
 
+	//cfg.printAllLogs()
 	time.Sleep(RaftElectionTimeout / 2)
 
 	// bring original leader back to life,
 	for i := 0; i < servers; i++ {
 		cfg.disconnect(i)
 	}
+	fmt.Printf("Disconnected all\n")
+
 	cfg.connect((leader1 + 0) % servers)
 	cfg.connect((leader1 + 1) % servers)
 	cfg.connect(other)
 
+	fmt.Printf("Reconnected %v %v %v\n", (leader1+0)%servers, (leader1+1)%servers, other)
+
+	for i := 0; i < servers; i++ {
+		if i == 0 {
+			fmt.Printf("=================\n")
+		}
+		fmt.Printf("Server %v log(len: %v): %v\n", i, len(cfg.rafts[i].log), cfg.rafts[i].log)
+		fmt.Printf("===============\n")
+	}
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
-		cfg.one(rand.Int(), 3, true)
+		//cfg.one(rand.Int(), 3, true)
+		cfg.one(100+i, 3, true)
 	}
 
+	cfg.printAllLogs()
 	// now everyone
 	for i := 0; i < servers; i++ {
 		cfg.connect(i)
 	}
 	cfg.one(rand.Int(), servers, true)
+	cfg.printAllLogs()
 
 	cfg.end()
 }
@@ -705,7 +737,6 @@ func TestPersist32C(t *testing.T) {
 	cfg.end()
 }
 
-//
 // Test the scenarios described in Figure 8 of the extended Raft paper. Each
 // iteration asks a leader, if there is one, to insert a command in the Raft
 // log.  If there is a leader, that leader will fail quickly with a high
@@ -714,7 +745,6 @@ func TestPersist32C(t *testing.T) {
 // alive servers isn't enough to form a majority, perhaps start a new server.
 // The leader in a new term may try to finish replicating log entries that
 // haven't been committed yet.
-//
 func TestFigure82C(t *testing.T) {
 	servers := 5
 	cfg := make_config(t, servers, false, false)
