@@ -613,3 +613,28 @@ func (cfg *config) LogSize() int {
 	}
 	return logsize
 }
+
+func (cfg *config) checkConnection() {
+	var connected []int
+	var disconnected []int
+	for i := 0; i < len(cfg.connected); i++ {
+		if cfg.connected[i] {
+			connected = append(connected, i)
+		} else {
+			disconnected = append(disconnected, i)
+		}
+	}
+	DPrintf("connected: %v, disconnected %v\n", connected, disconnected)
+}
+
+func (cfg *config) printLogs() {
+	for i := 0; i < cfg.n; i++ {
+		if i == 0 {
+			fmt.Printf("=================\n")
+		}
+		cfg.rafts[i].mu.Lock()
+		fmt.Printf("Server %v log(len: %v): %v\n", i, len(cfg.rafts[i].log), cfg.rafts[i].log)
+		cfg.rafts[i].mu.Unlock()
+		fmt.Printf("===============\n")
+	}
+}

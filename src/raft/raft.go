@@ -20,6 +20,7 @@ package raft
 import (
 	//	"bytes"
 
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	"math/rand"
 	"time"
 
+	"6.824/labgob"
 	"6.824/labrpc"
 )
 
@@ -120,12 +122,13 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted state.
@@ -135,17 +138,21 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var log []LogEntry
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&log) != nil {
+		panic("decoding error!")
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.log = log
+	}
+	//rf.PrintPersist()
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -243,10 +250,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.state = FOLLOWER
 		rf.votedFor = args.CandidateId
 		rf.currentTerm = args.Term
+		rf.persist()
 		reply.VoteGranted = true
 	} else if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 		rf.state = FOLLOWER
 		rf.votedFor = args.CandidateId
+		rf.persist()
 		reply.VoteGranted = true
 	} else {
 		//fmt.Printf("server %v refused to vote for %v, has voted for: %v\n", rf.me, args.CandidateId, rf.votedFor)
@@ -317,6 +326,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		var entry LogEntry = LogEntry{command, term}
 		//fmt.Printf("Command(Raft: %v): %+v\n", rf.me, entry)
 		rf.log = append(rf.log, entry)
+		rf.persist()
 		index = len(rf.log)
 		//rf.cond.Signal()
 		rf.mu.Unlock()
@@ -382,6 +392,20 @@ func (rf *Raft) ticker() {
 	}
 }
 
+func (rf *Raft) sendLog() {
+	for {
+		rf.mu.Lock()
+		if rf.state == LEADER && len(rf.log) > 0 {
+			rf.mu.Unlock()
+			rf.sendLogEntries()
+		} else {
+			rf.mu.Unlock()
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func (rf *Raft) newElection() {
 	// vote for itself
 	numGranted := 1
@@ -398,6 +422,7 @@ func (rf *Raft) newElection() {
 	if req.LastLogIndex >= 0 {
 		req.LastLogTerm = rf.log[req.LastLogIndex].Term
 	}
+	rf.persist()
 	rf.mu.Unlock()
 
 	var voteCh = make(chan int)
@@ -414,7 +439,8 @@ func (rf *Raft) newElection() {
 			rf.mu.Lock()
 			gotTheVote := ok && reply.VoteGranted && reply.Term == rf.currentTerm
 			if reply.Term > rf.currentTerm {
-				rf.currentTerm = reply.Term
+				rf.currentTerm = reply.Term + 1
+				rf.persist()
 			}
 			rf.mu.Unlock()
 
@@ -449,6 +475,8 @@ func (rf *Raft) newElection() {
 
 			rf.mu.Unlock()
 
+			go rf.sendLog()
+
 			rf.sendHeartBeats()
 			break
 		}
@@ -466,6 +494,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if args.Term > rf.currentTerm {
 			rf.currentTerm = args.Term
 			rf.votedFor = -1
+			rf.persist()
 			rf.state = FOLLOWER
 		} else {
 			rf.state = FOLLOWER
@@ -488,6 +517,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 			for index < len(args.Entries) {
 				rf.log = append(rf.log, args.Entries[index])
+				rf.persist()
 				index += 1
 			}
 
@@ -570,6 +600,7 @@ func (rf *Raft) sendHeartBeats() {
 				rf.state = FOLLOWER
 				rf.votedFor = -1
 				rf.currentTerm = reply.Term
+				rf.persist()
 			}
 			rf.mu.Unlock()
 		}(i)
@@ -621,6 +652,7 @@ func (rf *Raft) sendLogEntries() {
 					rf.state = FOLLOWER
 					rf.votedFor = -1
 					rf.currentTerm = reply.Term
+					rf.persist()
 					rf.mu.Unlock()
 					commitCh <- 0
 					break
@@ -631,12 +663,12 @@ func (rf *Raft) sendLogEntries() {
 					commitCh <- 1
 					break
 				} else {
-					fmt.Printf("server %v failed to match. Retrying...\n", index)
+					//fmt.Printf("server %v failed to match. Retrying...\n", index)
 					if reply.XTerm == -1 {
-						fmt.Printf("Missing XTerm\n")
+						//fmt.Printf("Missing XTerm\n")
 						req.PrevLogIndex = reply.LogLenth - 1
 					} else {
-						fmt.Printf("Conflicting XTerm\n")
+						//fmt.Printf("Conflicting XTerm\n")
 						has_xterm := false
 						last_index_xterm := -1
 						for j := len(rf.log) - 1; j >= 0; j-- {
@@ -702,6 +734,13 @@ func (rf *Raft) sendLogEntries() {
 			}
 		}
 	}(commitCh)
+}
+
+func (rf *Raft) PrintPersist() {
+	fmt.Printf("=======Service %v persistent state======\n", rf.me)
+	fmt.Printf("currentTerm: %v votedFor: %v\n", rf.currentTerm, rf.votedFor)
+	fmt.Printf("log: %v\n", rf.log)
+	fmt.Printf("=============================\n")
 }
 
 // the service or tester wants to create a Raft server. the ports

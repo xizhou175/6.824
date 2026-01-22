@@ -382,7 +382,7 @@ func TestRejoin2B(t *testing.T) {
 	cfg.rafts[leader1].Start(103)
 	cfg.rafts[leader1].Start(104)
 
-	cfg.printAllLogs()
+	//cfg.printAllLogs()
 
 	// new leader commits, also for index=2
 	cfg.one(103, 2, true)
@@ -481,13 +481,13 @@ func TestBackup2B(t *testing.T) {
 
 	fmt.Printf("Reconnected %v %v %v\n", (leader1+0)%servers, (leader1+1)%servers, other)
 
-	for i := 0; i < servers; i++ {
+	/*for i := 0; i < servers; i++ {
 		if i == 0 {
 			fmt.Printf("=================\n")
 		}
 		fmt.Printf("Server %v log(len: %v): %v\n", i, len(cfg.rafts[i].log), cfg.rafts[i].log)
 		fmt.Printf("===============\n")
-	}
+	}*/
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
 		//cfg.one(rand.Int(), 3, true)
@@ -500,7 +500,7 @@ func TestBackup2B(t *testing.T) {
 		cfg.connect(i)
 	}
 	cfg.one(rand.Int(), servers, true)
-	cfg.printAllLogs()
+	//cfg.printAllLogs()
 
 	cfg.end()
 }
@@ -623,6 +623,7 @@ func TestPersist12C(t *testing.T) {
 	cfg.begin("Test (2C): basic persistence")
 
 	cfg.one(11, servers, true)
+	cfg.printAllLogs()
 
 	// crash and re-start all
 	for i := 0; i < servers; i++ {
@@ -635,6 +636,8 @@ func TestPersist12C(t *testing.T) {
 
 	cfg.one(12, servers, true)
 
+	cfg.printAllLogs()
+
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
 	cfg.start1(leader1, cfg.applier)
@@ -645,14 +648,20 @@ func TestPersist12C(t *testing.T) {
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
 	cfg.one(14, servers-1, true)
+
 	cfg.start1(leader2, cfg.applier)
 	cfg.connect(leader2)
 
+	cfg.printAllLogs()
+	fmt.Printf("wait for %v to join before killing i3\n", leader2)
 	cfg.wait(4, servers, -1) // wait for leader2 to join before killing i3
+	fmt.Printf("%v is back\n", leader2)
+	cfg.printAllLogs()
 
 	i3 := (cfg.checkOneLeader() + 1) % servers
 	cfg.disconnect(i3)
 	cfg.one(15, servers-1, true)
+
 	cfg.start1(i3, cfg.applier)
 	cfg.connect(i3)
 
@@ -700,6 +709,9 @@ func TestPersist22C(t *testing.T) {
 
 		cfg.connect((leader1 + 4) % servers)
 		cfg.connect((leader1 + 0) % servers)
+		fmt.Printf("iter: %v\n", iters)
+		cfg.printLogs()
+		cfg.checkConnection()
 	}
 
 	cfg.one(1000, servers, true)
