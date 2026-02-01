@@ -263,7 +263,7 @@ func TestFailNoAgree2B(t *testing.T) {
 }
 
 func TestConcurrentStarts2B(t *testing.T) {
-	servers := 3
+	servers := 5
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
 

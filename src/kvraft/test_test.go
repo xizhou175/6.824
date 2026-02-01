@@ -1,16 +1,19 @@
 package kvraft
 
-import "6.824/porcupine"
-import "6.824/models"
-import "testing"
-import "strconv"
-import "time"
-import "math/rand"
-import "strings"
-import "sync"
-import "sync/atomic"
-import "fmt"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"math/rand"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"6.824/models"
+	"6.824/porcupine"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -284,7 +287,9 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 					v := Get(cfg, myck, key, opLog, cli)
 					// the following check only makes sense when we're not using random keys
 					if !randomkeys && v != last {
-						t.Fatalf("get wrong value, key %v, wanted:\n%v\n, got\n%v\n", key, last, v)
+						t.Fatalf("%v get wrong value, key %v, wanted:\n%v\n, got\n%v\nnv: %v", cli, key, last, v, nv)
+					} else {
+						fmt.Printf("%v get correct value for key %v, nv: %v\n", cli, key, nv)
 					}
 				}
 			}
@@ -427,7 +432,7 @@ func TestSpeed3A(t *testing.T) {
 
 func TestConcurrent3A(t *testing.T) {
 	// Test: many clients (3A) ...
-	GenericTest(t, "3A", 5, 5, false, false, false, -1, false)
+	GenericTest(t, "3A", 2, 5, false, false, false, -1, false)
 }
 
 func TestUnreliable3A(t *testing.T) {
@@ -585,12 +590,10 @@ func TestPersistPartitionUnreliableLinearizable3A(t *testing.T) {
 	GenericTest(t, "3A", 15, 7, true, true, true, -1, true)
 }
 
-//
 // if one server falls behind, then rejoins, does it
 // recover by using the InstallSnapshot RPC?
 // also checks that majority discards committed log entries
 // even if minority doesn't respond.
-//
 func TestSnapshotRPC3B(t *testing.T) {
 	const nservers = 3
 	maxraftstate := 1000

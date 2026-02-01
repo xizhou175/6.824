@@ -98,6 +98,10 @@ type Raft struct {
 	applyCh *chan ApplyMsg
 }
 
+func (rf *Raft) GetId() int {
+	return rf.me
+}
+
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
@@ -538,7 +542,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 					applyMsg.Command = entry.Command
 					applyMsg.CommandIndex = rf.lastApplied + 1
 					*(rf.applyCh) <- applyMsg
-					//fmt.Printf("applied %v(%v) on Raft %v\n", entry.Command, rf.lastApplied+1, rf.me)
+					//fmt.Printf("------applied %v(%v) on Raft %v------\n", entry.Command, rf.lastApplied+1, rf.me)
 				}
 			}
 		} else if len(args.Entries) != 0 {
@@ -657,7 +661,7 @@ func (rf *Raft) sendLogEntries() {
 					commitCh <- 0
 					break
 				} else if reply.Success == true {
-					//fmt.Printf("server %v committed\n", index)
+					//fmt.Printf("server %v committed %+v\n", index, rf.log[len(rf.log)-1].Command)
 					rf.nextIndex[index] = len(rf.log)
 					rf.mu.Unlock()
 					commitCh <- 1
@@ -712,10 +716,9 @@ func (rf *Raft) sendLogEntries() {
 			// check if we already achieved machority
 			if numCommitted >= len(rf.peers)/2 {
 
-				//DPrintf("(Raft %v -=Commit=-)\t Majority achieved", rf.me)
-
 				rf.mu.Lock()
 				rf.commitIndex = len(rf.log) - 1
+				//DPrintf("(Raft %v -=Commit %+v=-)\t Majority achieved", rf.me, rf.log[rf.commitIndex].Command)
 
 				for rf.lastApplied < rf.commitIndex {
 					rf.lastApplied++
