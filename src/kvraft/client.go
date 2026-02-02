@@ -11,6 +11,8 @@ import (
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	seqId    int
+	clientId int
 }
 
 func nrand() int64 {
@@ -20,9 +22,10 @@ func nrand() int64 {
 	return x
 }
 
-func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
+func MakeClerk(servers []*labrpc.ClientEnd, cli int) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	ck.clientId = cli
 	// You'll have to add code here.
 	return ck
 }
@@ -40,16 +43,26 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	fmt.Printf("======Get(k: %v)======\n", key)
+	//fmt.Printf("======Get(k: %v)======\n", key)
 	var val string
+	ck.seqId++
 	for {
 		for index := range ck.servers {
-			args := GetArgs{Key: key}
+			args := GetArgs{Key: key, SeqId: ck.seqId, ClientId: ck.clientId}
 			reply := GetReply{Err: ""}
-			ck.servers[index].Call("KVServer.Get", &args, &reply)
+			ok := ck.servers[index].Call("KVServer.Get", &args, &reply)
+
+			if !ok {
+				continue
+			}
+
 			if reply.Err == "" {
 				val = reply.Value
 				return val
+			} else if reply.Err == "timeout" {
+				break
+			} else {
+				continue
 			}
 		}
 	}
@@ -65,13 +78,23 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	ck.seqId++
 	for {
 		for index := range ck.servers {
-			args := PutAppendArgs{Key: key, Value: value, Op: op}
+			args := PutAppendArgs{Key: key, Value: value, Op: op, SeqId: ck.seqId, ClientId: ck.clientId}
 			reply := PutAppendReply{Err: ""}
-			ck.servers[index].Call("KVServer.PutAppend", &args, &reply)
+			ok := ck.servers[index].Call("KVServer.PutAppend", &args, &reply)
+
+			if !ok {
+				continue
+			}
+
 			if reply.Err == "" {
 				return
+			} else if reply.Err == "timeout" {
+				break
+			} else if reply.Err == "not a leader" {
+				continue
 			}
 		}
 	}

@@ -25,9 +25,11 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Op    string
-	Key   string
-	Value string
+	Op       string
+	Key      string
+	Value    string
+	ClientId int
+	SeqId    int
 }
 
 type KVServer struct {
@@ -40,7 +42,9 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 	kvTb         map[string]string
 	msgChan      map[int]chan Op
-	wait         bool
+	wait         map[int]bool
+	//getKey       map[string]bool
+	seqId map[int]int
 	// Your definitions here.
 }
 
@@ -63,46 +67,60 @@ func (kv *KVServer) deleteMsgChannel(index int) {
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-	op := Op{Op: "Get", Key: args.Key}
+	op := Op{Op: "Get", Key: args.Key, ClientId: args.ClientId, SeqId: args.SeqId}
 
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
 		reply.Err = "not a leader"
 		return
 	}
-	kv.mu.Lock()
-	kv.wait = true
-	kv.mu.Unlock()
 
 	index, _, _ := kv.rf.Start(op)
+
+	kv.mu.Lock()
+	kv.wait[index] = true
+	//kv.getKey[args.Key] = true
+	kv.mu.Unlock()
 
 	ch := kv.getMsgChannel(index)
 	select {
 	case replyOp := <-ch:
-		fmt.Printf("Agreement reached on %+v\n", replyOp)
+		//fmt.Printf("Agreement reached on %+v\n", replyOp)
+
+		if replyOp.ClientId != op.ClientId || replyOp.SeqId != op.SeqId {
+			reply.Err = "wrong op"
+			return
+		}
+
 		key := replyOp.Key
 		kv.mu.Lock()
 		value, ok := kv.kvTb[key]
 
 		//fmt.Printf("kv table: %v\n", kv.kvTb)
+		//delete(kv.getKey, args.Key)
 		kv.mu.Unlock()
 		if !ok {
-			panic("no key in the kbTb")
+			reply.Err = "no key"
 		} else {
 			reply.Value = value
 		}
 		kv.deleteMsgChannel(index)
 		//fmt.Printf("Got value %v for %+v\n", value, replyOp)
 		return
-	case <-time.After(1 * time.Second):
+	case <-time.After(100 * time.Millisecond):
 		kv.deleteMsgChannel(index)
+		kv.mu.Lock()
+		//delete(kv.getKey, args.Key)
+		kv.mu.Unlock()
+		reply.Err = "timeout"
+		fmt.Printf("Timeout on %+v\n", op)
 		return
 	}
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-	op := Op{Op: args.Op, Key: args.Key, Value: args.Value}
+	op := Op{Op: args.Op, Key: args.Key, Value: args.Value, ClientId: args.ClientId, SeqId: args.SeqId}
 
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
@@ -110,19 +128,31 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 
+	/*for {
+		kv.mu.Lock()
+		_, ok := kv.getKey[args.Key]
+		kv.mu.Unlock()
+		if !ok {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}*/
+	index, _, _ := kv.rf.Start(op)
+
 	kv.mu.Lock()
-	kv.wait = true
+	kv.wait[index] = true
 	kv.mu.Unlock()
 
-	index, _, _ := kv.rf.Start(op)
 	ch := kv.getMsgChannel(index)
 	select {
 	case replyOp := <-ch:
-		fmt.Printf("Agreement reached on %+v\n", replyOp)
+		fmt.Printf("Agreement reached on %+v(%v)\n", replyOp, index)
 		kv.deleteMsgChannel(index)
 		return
-	case <-time.After(1 * time.Second):
+	case <-time.After(400 * time.Millisecond):
+		fmt.Printf("Timeout on %+v\n", op)
 		kv.deleteMsgChannel(index)
+		reply.Err = "timeout"
 		return
 	}
 }
@@ -151,6 +181,12 @@ func (kv *KVServer) ExecuteOp(op *Op) {
 	defer kv.mu.Unlock()
 	//fmt.Printf("++++++server: %v, op: %+v++++++\n", kv.rf.GetId(), op)
 	_, ok := kv.kvTb[op.Key]
+
+	if kv.isDuplicate(op.ClientId, op.SeqId) == true {
+		return
+	}
+
+	kv.seqId[op.ClientId] = op.SeqId
 	if op.Op == "Put" {
 		kv.kvTb[op.Key] = op.Value
 	} else if op.Op == "Append" {
@@ -162,6 +198,14 @@ func (kv *KVServer) ExecuteOp(op *Op) {
 	}
 }
 
+func (kv *KVServer) isDuplicate(clientId int, seqId int) bool {
+	lastSeqId, ok := kv.seqId[clientId]
+	if !ok {
+		return false
+	}
+	return seqId <= lastSeqId
+}
+
 func (kv *KVServer) ReadCh() {
 	for msg := range kv.applyCh {
 		op := msg.Command.(Op)
@@ -171,10 +215,12 @@ func (kv *KVServer) ReadCh() {
 			kv.ExecuteOp(&op)
 		}
 		kv.mu.Lock()
-		wait := kv.wait
-		kv.wait = false
+		_, ok := kv.wait[msg.CommandIndex]
+		if ok {
+			delete(kv.wait, msg.CommandIndex)
+		}
 		kv.mu.Unlock()
-		if wait == true {
+		if ok {
 			ch := kv.getMsgChannel(msg.CommandIndex)
 			ch <- op
 		}
@@ -209,7 +255,9 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.kvTb = make(map[string]string)
 	kv.msgChan = make(map[int]chan Op)
 
-	kv.wait = false
+	kv.wait = make(map[int]bool)
+	//kv.getKey = make(map[string]bool)
+	kv.seqId = make(map[int]int)
 
 	go kv.ReadCh()
 	// You may need initialization code here.
