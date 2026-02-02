@@ -42,7 +42,7 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 	kvTb         map[string]string
 	msgChan      map[int]chan Op
-	wait         map[int]bool
+	//wait         map[int]bool
 	//getKey       map[string]bool
 	seqId map[int]int
 	// Your definitions here.
@@ -53,7 +53,7 @@ func (kv *KVServer) getMsgChannel(index int) chan Op {
 	defer kv.mu.Unlock()
 	ch, ok := kv.msgChan[index]
 	if !ok {
-		kv.msgChan[index] = make(chan Op)
+		kv.msgChan[index] = make(chan Op, 1)
 		ch = kv.msgChan[index]
 	}
 	return ch
@@ -77,12 +77,14 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	index, _, _ := kv.rf.Start(op)
 
-	kv.mu.Lock()
-	kv.wait[index] = true
+	//kv.mu.Lock()
+	//kv.wait[index] = true
 	//kv.getKey[args.Key] = true
-	kv.mu.Unlock()
+	//kv.mu.Unlock()
 
 	ch := kv.getMsgChannel(index)
+
+	defer kv.deleteMsgChannel(index)
 	select {
 	case replyOp := <-ch:
 		//fmt.Printf("Agreement reached on %+v\n", replyOp)
@@ -104,11 +106,9 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		} else {
 			reply.Value = value
 		}
-		kv.deleteMsgChannel(index)
 		//fmt.Printf("Got value %v for %+v\n", value, replyOp)
 		return
 	case <-time.After(100 * time.Millisecond):
-		kv.deleteMsgChannel(index)
 		kv.mu.Lock()
 		//delete(kv.getKey, args.Key)
 		kv.mu.Unlock()
@@ -139,19 +139,22 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}*/
 	index, _, _ := kv.rf.Start(op)
 
-	kv.mu.Lock()
-	kv.wait[index] = true
-	kv.mu.Unlock()
+	//kv.mu.Lock()
+	//kv.wait[index] = true
+	//kv.mu.Unlock()
 
 	ch := kv.getMsgChannel(index)
+	defer kv.deleteMsgChannel(index)
 	select {
 	case replyOp := <-ch:
+		if replyOp.ClientId != op.ClientId || replyOp.SeqId != op.SeqId {
+			reply.Err = "wrong op"
+			return
+		}
 		fmt.Printf("Agreement reached on %+v(%v)\n", replyOp, index)
-		kv.deleteMsgChannel(index)
 		return
 	case <-time.After(400 * time.Millisecond):
 		fmt.Printf("Timeout on %+v\n", op)
-		kv.deleteMsgChannel(index)
 		reply.Err = "timeout"
 		return
 	}
@@ -214,16 +217,16 @@ func (kv *KVServer) ReadCh() {
 		} else if op.Op == "Append" {
 			kv.ExecuteOp(&op)
 		}
-		kv.mu.Lock()
-		_, ok := kv.wait[msg.CommandIndex]
-		if ok {
-			delete(kv.wait, msg.CommandIndex)
-		}
-		kv.mu.Unlock()
-		if ok {
-			ch := kv.getMsgChannel(msg.CommandIndex)
-			ch <- op
-		}
+		//kv.mu.Lock()
+		//_, ok := kv.wait[msg.CommandIndex]
+		//if ok {
+		//	delete(kv.wait, msg.CommandIndex)
+		//}
+		//kv.mu.Unlock()
+		//if ok {
+		ch := kv.getMsgChannel(msg.CommandIndex)
+		ch <- op
+		//}
 	}
 }
 
@@ -255,7 +258,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.kvTb = make(map[string]string)
 	kv.msgChan = make(map[int]chan Op)
 
-	kv.wait = make(map[int]bool)
+	//kv.wait = make(map[int]bool)
 	//kv.getKey = make(map[string]bool)
 	kv.seqId = make(map[int]int)
 
