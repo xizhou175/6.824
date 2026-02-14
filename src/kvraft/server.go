@@ -1,7 +1,6 @@
 package kvraft
 
 import (
-	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -108,12 +107,12 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 		//fmt.Printf("Got value %v for %+v\n", value, replyOp)
 		return
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(1 * time.Second):
 		kv.mu.Lock()
 		//delete(kv.getKey, args.Key)
 		kv.mu.Unlock()
 		reply.Err = "timeout"
-		fmt.Printf("Timeout on %+v\n", op)
+		//fmt.Printf("Timeout on %+v\n", op)
 		return
 	}
 }
@@ -151,10 +150,10 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			reply.Err = "wrong op"
 			return
 		}
-		fmt.Printf("Agreement reached on %+v(%v)\n", replyOp, index)
+		//fmt.Printf("Agreement reached on %+v(%v)\n", replyOp, index)
 		return
 	case <-time.After(400 * time.Millisecond):
-		fmt.Printf("Timeout on %+v\n", op)
+		//fmt.Printf("Timeout on %+v\n", op)
 		reply.Err = "timeout"
 		return
 	}

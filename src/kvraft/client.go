@@ -2,7 +2,6 @@ package kvraft
 
 import (
 	"crypto/rand"
-	"fmt"
 	"math/big"
 
 	"6.824/labrpc"
@@ -101,10 +100,10 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	fmt.Printf("======Put(k:%v v:%v)======\n", key, value)
+	//fmt.Printf("======Put(k:%v v:%v)======\n", key, value)
 	ck.PutAppend(key, value, "Put")
 }
 func (ck *Clerk) Append(key string, value string) {
-	fmt.Printf("======Append(k:%v v:%v)======\n", key, value)
+	//fmt.Printf("======Append(k:%v v:%v)======\n", key, value)
 	ck.PutAppend(key, value, "Append")
 }
