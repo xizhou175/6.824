@@ -451,7 +451,7 @@ func TestBackup2B(t *testing.T) {
 		cfg.one(i+50, 3, true)
 	}
 
-	//cfg.printAllLogs()
+	cfg.printAllLogs()
 	// now another partitioned leader and one follower
 	leader2 := cfg.checkOneLeader()
 	other := (leader1 + 2) % servers
@@ -462,11 +462,12 @@ func TestBackup2B(t *testing.T) {
 	fmt.Printf("leader %v disconnected %v\n", leader2, other)
 	// lots more commands that won't commit
 	for i := 0; i < 50; i++ {
-		cfg.rafts[leader2].Start(rand.Int())
+		//cfg.rafts[leader2].Start(rand.Int())
+		cfg.rafts[leader2].Start(1000 + i)
 	}
 	fmt.Printf("Messed up Raft %v log\n", leader2)
 
-	//cfg.printAllLogs()
+	cfg.printAllLogs()
 	time.Sleep(RaftElectionTimeout / 2)
 
 	// bring original leader back to life,
@@ -481,24 +482,24 @@ func TestBackup2B(t *testing.T) {
 
 	fmt.Printf("Reconnected %v %v %v\n", (leader1+0)%servers, (leader1+1)%servers, other)
 
-	/*for i := 0; i < servers; i++ {
+	for i := 0; i < servers; i++ {
 		if i == 0 {
 			fmt.Printf("=================\n")
 		}
 		fmt.Printf("Server %v log(len: %v): %v\n", i, len(cfg.rafts[i].log), cfg.rafts[i].log)
 		fmt.Printf("===============\n")
-	}*/
+	}
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
 		//cfg.one(rand.Int(), 3, true)
 		cfg.one(100+i, 3, true)
 	}
 
-	cfg.printAllLogs()
 	// now everyone
 	for i := 0; i < servers; i++ {
 		cfg.connect(i)
 	}
+	cfg.printAllLogs()
 	cfg.one(rand.Int(), servers, true)
 	//cfg.printAllLogs()
 
