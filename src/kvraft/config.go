@@ -176,6 +176,7 @@ func (cfg *config) ConnectAll() {
 
 // Sets up 2 partitions with connectivity between servers in each  partition.
 func (cfg *config) partition(p1 []int, p2 []int) {
+	fmt.Print("partition: p1 =", p1, " p2 =", p2, "\n")
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
 	// log.Printf("partition servers into: %v %v\n", p1, p2)

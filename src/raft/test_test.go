@@ -680,6 +680,7 @@ func TestPersist22C(t *testing.T) {
 	index := 1
 	for iters := 0; iters < 5; iters++ {
 		cfg.one(10+index, servers, true)
+		cfg.printLogs()
 		index++
 
 		leader1 := cfg.checkOneLeader()
@@ -688,6 +689,7 @@ func TestPersist22C(t *testing.T) {
 		cfg.disconnect((leader1 + 2) % servers)
 
 		cfg.one(10+index, servers-2, true)
+		cfg.printLogs()
 		index++
 
 		cfg.disconnect((leader1 + 0) % servers)

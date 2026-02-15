@@ -107,7 +107,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 		//fmt.Printf("Got value %v for %+v\n", value, replyOp)
 		return
-	case <-time.After(1 * time.Second):
+	case <-time.After(400 * time.Millisecond):
 		kv.mu.Lock()
 		//delete(kv.getKey, args.Key)
 		kv.mu.Unlock()
@@ -152,7 +152,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 		//fmt.Printf("Agreement reached on %+v(%v)\n", replyOp, index)
 		return
-	case <-time.After(400 * time.Millisecond):
+	case <-time.After(1000 * time.Millisecond):
 		//fmt.Printf("Timeout on %+v\n", op)
 		reply.Err = "timeout"
 		return
@@ -197,6 +197,7 @@ func (kv *KVServer) ExecuteOp(op *Op) {
 		} else {
 			kv.kvTb[op.Key] = op.Value
 		}
+		//fmt.Printf("server: %v Appended %v to %v\n", kv.me, op.Value, op.Key)
 	}
 }
 

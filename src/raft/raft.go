@@ -133,6 +133,7 @@ func (rf *Raft) persist() {
 	e.Encode(rf.log)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
+	//DPrintf("Raft %v: persist() term=%v votedFor=%v logLen=%v", rf.me, rf.currentTerm, rf.votedFor, len(rf.log))
 }
 
 // restore previously persisted state.
@@ -155,6 +156,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.log = log
+		DPrintf("Raft %v: readPersist() term=%v votedFor=%v logLen=%v", rf.me, rf.currentTerm, rf.votedFor, len(rf.log))
 	}
 	//rf.PrintPersist()
 }
@@ -334,7 +336,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		index = len(rf.log)
 		//rf.cond.Signal()
 		rf.mu.Unlock()
-		rf.sendLogEntries()
+		rf.sendLogEntries(index - 1)
 	} else {
 		isLeader = false
 		rf.mu.Unlock()
@@ -401,7 +403,7 @@ func (rf *Raft) sendLog() {
 		rf.mu.Lock()
 		if rf.state == LEADER && len(rf.log) > 0 {
 			rf.mu.Unlock()
-			rf.sendLogEntries()
+			rf.sendLogEntries(len(rf.log) - 1)
 		} else {
 			rf.mu.Unlock()
 			break
@@ -512,17 +514,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		if reply.Success == true {
 			//fmt.Printf("%v currentTerm: %v  args: %+v\n", rf.me, rf.currentTerm, *args)
-			index := 0
-
-			for j := args.PrevLogIndex + 1; j < len(rf.log) && index < len(args.Entries); j++ {
-				rf.log[j] = args.Entries[index]
-				index++
-			}
-
-			for index < len(args.Entries) {
-				rf.log = append(rf.log, args.Entries[index])
-				rf.persist()
-				index += 1
+			// Only overwrite/truncate if there's a conflict (different term at same index)
+			// This prevents out-of-order or duplicate RPCs from corrupting the log
+			for i, entry := range args.Entries {
+				logIndex := args.PrevLogIndex + 1 + i
+				if logIndex < len(rf.log) {
+					if rf.log[logIndex].Term != entry.Term {
+						// Conflict: truncate log from here and append remaining entries
+						rf.log = rf.log[:logIndex]
+						rf.log = append(rf.log, args.Entries[i:]...)
+						rf.persist()
+						break
+					}
+					// No conflict, entry already exists with same term - skip
+				} else {
+					// Append new entries
+					rf.log = append(rf.log, args.Entries[i:]...)
+					rf.persist()
+					break
+				}
 			}
 
 			//fmt.Printf("rf.commitIndex %v leadercommit %v\n", rf.commitIndex, args.LeaderCommit)
@@ -611,26 +621,26 @@ func (rf *Raft) sendHeartBeats() {
 	}
 }
 
-func (rf *Raft) sendLogEntries() {
+func (rf *Raft) sendLogEntries(commitIndex int) {
 	rf.mu.Lock()
 	all_req := AppendEntriesArgs{}
 	all_req.Term = rf.currentTerm
 	all_req.LeaderId = rf.me
 	// length of rf.log is at least 1
 
-	all_req.Entries = append(all_req.Entries, rf.log[len(rf.log)-1])
+	all_req.Entries = append(all_req.Entries, rf.log[commitIndex])
 
 	for i := 0; i < len(rf.peers); i++ {
 		rf.nextIndex[i] = len(rf.log)
 	}
-	all_req.PrevLogIndex = len(rf.log) - 2
+	all_req.PrevLogIndex = commitIndex - 1
 	if all_req.PrevLogIndex >= 0 {
 		all_req.PrevLogTerm = rf.log[all_req.PrevLogIndex].Term
 	}
 	all_req.LeaderCommit = -1
 	rf.mu.Unlock()
 
-	var commitCh = make(chan int)
+	var commitCh = make(chan int, len(rf.peers))
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
 			continue
@@ -661,18 +671,19 @@ func (rf *Raft) sendLogEntries() {
 					commitCh <- 0
 					break
 				} else if reply.Success == true {
-					//fmt.Printf("server %v committed %+v\n", index, rf.log[len(rf.log)-1].Command)
-					rf.nextIndex[index] = len(rf.log)
+					//fmt.Printf("server %v committed %+v\n", index, rf.log[commitIndex].Command)
+					rf.nextIndex[index] = commitIndex + 1
 					rf.mu.Unlock()
 					commitCh <- 1
 					break
 				} else {
-					//fmt.Printf("server %v failed to match. Retrying...\n", index)
+					// Log the failure and the reply for debugging backup logic
+					//DPrintf("Raft %v: AppendEntries to %v failed; reply={Term:%v Success:%v XTerm:%v XIndex:%v LogLen:%v} nextIndex(before)=%v",
+					//	rf.me, index, reply.Term, reply.Success, reply.XTerm, reply.XIndex, reply.LogLenth, rf.nextIndex[index])
+
 					if reply.XTerm == -1 {
-						//fmt.Printf("Missing XTerm\n")
 						req.PrevLogIndex = reply.LogLenth - 1
 					} else {
-						//fmt.Printf("Conflicting XTerm\n")
 						has_xterm := false
 						last_index_xterm := -1
 						for j := len(rf.log) - 1; j >= 0; j-- {
@@ -691,22 +702,30 @@ func (rf *Raft) sendLogEntries() {
 					req.Term = rf.currentTerm
 					req.LeaderId = rf.me
 
-					//req.PrevLogIndex -= 1
 					nextIndex := req.PrevLogIndex + 1
 					rf.nextIndex[index] = nextIndex
+					if nextIndex < 0 {
+						nextIndex = 0
+					}
+					if nextIndex > len(rf.log) {
+						nextIndex = len(rf.log)
+					}
 					req.Entries = rf.log[nextIndex:]
 
 					if req.PrevLogIndex >= 0 {
 						req.PrevLogTerm = rf.log[req.PrevLogIndex].Term
 					}
-					//fmt.Printf("req: %+v\n", req)
+
+					//DPrintf("Raft %v: retrying AppendEntries to %v with PrevLogIndex=%v PrevLogTerm=%v nextIndex=%v entries=%v",
+					//	rf.me, index, req.PrevLogIndex, req.PrevLogTerm, nextIndex, len(req.Entries))
+
 					rf.mu.Unlock()
 				}
 			}
 		}(i)
 	}
 
-	go func(commitCh chan int) {
+	go func(commitCh chan int, commitIndex int) {
 		numCommitted := 0
 		for i := 0; i < len(rf.peers); i++ {
 			commit := <-commitCh
@@ -717,8 +736,9 @@ func (rf *Raft) sendLogEntries() {
 			if numCommitted >= len(rf.peers)/2 {
 
 				rf.mu.Lock()
-				rf.commitIndex = len(rf.log) - 1
-				//DPrintf("(Raft %v -=Commit %+v=-)\t Majority achieved", rf.me, rf.log[rf.commitIndex].Command)
+				rf.commitIndex = commitIndex
+				//DPrintf("Raft %v: leader sets commitIndex=%v logLen=%v", rf.me, rf.commitIndex, len(rf.log))
+				//DPrintf("(Raft %v -=Commit %+v(%v)=-)\t Majority achieved", rf.me, rf.log[rf.commitIndex].Command, commitIndex)
 
 				for rf.lastApplied < rf.commitIndex {
 					rf.lastApplied++
@@ -728,6 +748,7 @@ func (rf *Raft) sendLogEntries() {
 					applyMsg.Command = entry.Command
 					applyMsg.CommandIndex = rf.lastApplied + 1
 					*(rf.applyCh) <- applyMsg
+					//DPrintf("Raft %v: applied index=%v cmd=%+v", rf.me, applyMsg.CommandIndex, applyMsg.Command)
 					//fmt.Printf("Leader applied %v(%v) on Raft %v\n", entry.Command, rf.lastApplied+1, rf.me)
 				}
 				rf.sendHeartBeats()
@@ -736,7 +757,7 @@ func (rf *Raft) sendLogEntries() {
 				break
 			}
 		}
-	}(commitCh)
+	}(commitCh, commitIndex)
 }
 
 func (rf *Raft) PrintPersist() {
