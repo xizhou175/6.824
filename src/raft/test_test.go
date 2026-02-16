@@ -303,6 +303,13 @@ loop:
 		}
 
 		wg.Wait()
+		for i := 0; i < servers; i++ {
+			if i == 0 {
+				fmt.Printf("=================\n")
+			}
+			fmt.Printf("Server %v log(len: %v): %v\n", i, len(cfg.rafts[i].log), cfg.rafts[i].log)
+			fmt.Printf("===============\n")
+		}
 		close(is)
 
 		for j := 0; j < servers; j++ {

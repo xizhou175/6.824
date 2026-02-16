@@ -530,7 +530,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				index += 1
 			}
 
-			//fmt.Printf("server %v: last %v, rf.commitIndex %v leadercommit %v\n", rf.me, rf.lastApplied, rf.commitIndex, args.LeaderCommit)
+			//fmt.Printf("server %v: last %v, rf.commitIndex %v leadercommit %v matchIndex %v\n", rf.me, rf.lastApplied, rf.commitIndex, args.LeaderCommit, args.MatchIndex)
 			if rf.commitIndex < args.LeaderCommit && args.MatchIndex > rf.lastApplied {
 				if args.LeaderCommit < len(rf.log)-1 {
 					rf.commitIndex = args.LeaderCommit
@@ -668,9 +668,11 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 					commitCh <- 0
 					break
 				} else if reply.Success == true {
-					//fmt.Printf("server %v committed %+v\n", index, rf.log[commitIndex].Command)
+					//fmt.Printf("server %v committed %+v(%v)\n", index, rf.log[commitIndex].Command, commitIndex)
 					rf.nextIndex[index] = commitIndex + 1
-					rf.matchIndex[index] = commitIndex
+					if rf.matchIndex[index] < commitIndex {
+						rf.matchIndex[index] = commitIndex
+					}
 					rf.mu.Unlock()
 					commitCh <- 1
 					break
@@ -734,7 +736,9 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 			if numCommitted >= len(rf.peers)/2 {
 
 				rf.mu.Lock()
-				rf.commitIndex = commitIndex
+				if commitIndex > rf.commitIndex {
+					rf.commitIndex = commitIndex
+				}
 				//DPrintf("Raft %v: leader sets commitIndex=%v logLen=%v", rf.me, rf.commitIndex, len(rf.log))
 				//DPrintf("(Raft %v -=Commit %+v(%v)=-)\t Majority achieved", rf.me, rf.log[rf.commitIndex].Command, commitIndex)
 

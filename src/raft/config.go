@@ -497,6 +497,14 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 	}
 	nd, cmd := cfg.nCommitted(index)
 	if nd < n {
+		for i := 0; i < n; i++ {
+			if i == 0 {
+				fmt.Printf("=================\n")
+			}
+			fmt.Printf("Server %v log(len: %v): %v\n", i, len(cfg.rafts[i].log), cfg.rafts[i].log)
+			fmt.Printf("===============\n")
+		}
+		cfg.printAllLogs()
 		cfg.t.Fatalf("only %d decided for index %d; wanted %d\n",
 			nd, index, n)
 	}
