@@ -113,6 +113,20 @@ func (rf *Raft) logEmpty() bool {
 	return len(rf.log) == 0
 }
 
+func (rf *Raft) logSince(idx int) []LogEntry {
+	if rf.lastIncludedIndex == -1 {
+		return rf.log[idx:]
+	}
+	return rf.log[idx-1-rf.lastIncludedIndex:]
+}
+
+func (rf *Raft) logTo(idx int) []LogEntry {
+	if rf.lastIncludedIndex == -1 {
+		return rf.log[:idx+1]
+	}
+	return rf.log[:idx-rf.lastIncludedIndex]
+}
+
 func (rf *Raft) logAt(idx int) LogEntry {
 	if rf.lastIncludedIndex == -1 {
 		return rf.log[idx]
@@ -374,7 +388,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		//fmt.Printf("Command(Raft: %v): %+v\n", rf.me, entry)
 		rf.log = append(rf.log, entry)
 		rf.persist()
-		index = len(rf.log)
+		index = rf.getLastIndex() + 1
 		//rf.cond.Signal()
 		rf.mu.Unlock()
 		rf.sendLogEntries(index - 1)
@@ -520,7 +534,7 @@ func (rf *Raft) newElection() {
 				if j == rf.me {
 					continue
 				}
-				rf.nextIndex[j] = len(rf.log)
+				rf.nextIndex[j] = rf.getLastIndex() + 1
 				rf.matchIndex[j] = -1
 			}
 
@@ -553,8 +567,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		if args.PrevLogIndex < 0 {
 			reply.Success = true
-		} else if len(rf.log) > args.PrevLogIndex {
-			if rf.log[args.PrevLogIndex].Term == args.PrevLogTerm {
+		} else if rf.getLastIndex() >= args.PrevLogIndex {
+			if rf.logAt(args.PrevLogIndex).Term == args.PrevLogTerm {
 				reply.Success = true
 			}
 		}
@@ -565,8 +579,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			logInsertIndex := args.PrevLogIndex + 1
 			newEntriesIndex := 0
 
-			for logInsertIndex < len(rf.log) && newEntriesIndex < len(args.Entries) {
-				if rf.log[logInsertIndex].Term != args.Entries[newEntriesIndex].Term {
+			for logInsertIndex < rf.getLastIndex()+1 && newEntriesIndex < len(args.Entries) {
+				if rf.logAt(logInsertIndex).Term != args.Entries[newEntriesIndex].Term {
 					// Conflict: truncate log from here
 					break
 				}
@@ -576,23 +590,23 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 			// Truncate conflicting entries and append new ones
 			if newEntriesIndex < len(args.Entries) {
-				rf.log = rf.log[:logInsertIndex]
+				rf.log = rf.logTo(logInsertIndex - 1)
 				rf.log = append(rf.log, args.Entries[newEntriesIndex:]...)
 				rf.persist()
 			}
 
 			//fmt.Printf("server %v: last %v, rf.commitIndex %v leadercommit %v matchIndex %v\n", rf.me, rf.lastApplied, rf.commitIndex, args.LeaderCommit, args.MatchIndex)
 			if rf.commitIndex < args.LeaderCommit && args.MatchIndex > rf.lastApplied {
-				if args.LeaderCommit < len(rf.log)-1 {
+				if args.LeaderCommit < rf.getLastIndex() {
 					rf.commitIndex = args.LeaderCommit
 				} else {
-					rf.commitIndex = len(rf.log) - 1
+					rf.commitIndex = rf.getLastIndex()
 				}
 				//fmt.Printf("server %v: rf.commitIndex %v leadercommit %v prevlogindex %v last %v\n", rf.me, rf.commitIndex, args.LeaderCommit, args.PrevLogIndex, rf.lastApplied)
 				//fmt.Printf("rf.commitIndex %v lastApplied %v\n", rf.commitIndex, rf.lastApplied)
 				for rf.lastApplied < rf.commitIndex {
 					rf.lastApplied++
-					entry := rf.log[rf.lastApplied]
+					entry := rf.logAt(rf.lastApplied)
 					applyMsg := ApplyMsg{}
 					applyMsg.CommandValid = true
 					applyMsg.Command = entry.Command
@@ -604,13 +618,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		} else if len(args.Entries) != 0 {
 			reply.XTerm = -1
 			reply.XIndex = -1
-			if len(rf.log) <= args.PrevLogIndex {
-				reply.LogLenth = len(rf.log)
-			} else if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
-				reply.XTerm = rf.log[args.PrevLogIndex].Term
+			if rf.getLastIndex()+1 <= args.PrevLogIndex {
+				reply.LogLenth = rf.getLastIndex() + 1
+			} else if rf.logAt(args.PrevLogIndex).Term != args.PrevLogTerm {
+				reply.XTerm = rf.logAt(args.PrevLogIndex).Term
 				reply.XIndex = args.PrevLogIndex
 				for i := args.PrevLogIndex; i >= 0; i-- {
-					if rf.log[i].Term == reply.XTerm {
+					if rf.logAt(i).Term == reply.XTerm {
 						reply.XIndex = i
 					} else {
 						break
@@ -648,7 +662,7 @@ func (rf *Raft) sendHeartBeats() {
 			req.PrevLogIndex = rf.nextIndex[index] - 1
 			req.MatchIndex = rf.matchIndex[index]
 			if req.PrevLogIndex >= 0 {
-				req.PrevLogTerm = rf.log[req.PrevLogIndex].Term
+				req.PrevLogTerm = rf.logAt(req.PrevLogIndex).Term
 			}
 			rf.mu.Unlock()
 
@@ -675,14 +689,14 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 	all_req.LeaderId = rf.me
 	// length of rf.log is at least 1
 
-	all_req.Entries = append(all_req.Entries, rf.log[commitIndex])
+	all_req.Entries = append(all_req.Entries, rf.logAt(commitIndex))
 
 	for i := 0; i < len(rf.peers); i++ {
 		rf.nextIndex[i] = commitIndex + 1
 	}
 	all_req.PrevLogIndex = commitIndex - 1
 	if all_req.PrevLogIndex >= 0 {
-		all_req.PrevLogTerm = rf.log[all_req.PrevLogIndex].Term
+		all_req.PrevLogTerm = rf.logAt(all_req.PrevLogIndex).Term
 	}
 	all_req.LeaderCommit = -1
 	rf.mu.Unlock()
@@ -758,13 +772,13 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 					if nextIndex < 0 {
 						nextIndex = 0
 					}
-					if nextIndex >= len(rf.log) {
-						nextIndex = len(rf.log) - 1
+					if nextIndex >= rf.getLastIndex()+1 {
+						nextIndex = rf.getLastIndex()
 					}
-					req.Entries = rf.log[nextIndex:]
+					req.Entries = rf.logSince(nextIndex)
 
 					if req.PrevLogIndex >= 0 {
-						req.PrevLogTerm = rf.log[req.PrevLogIndex].Term
+						req.PrevLogTerm = rf.logAt(req.PrevLogIndex).Term
 					}
 
 					//DPrintf("Raft %v: retrying AppendEntries to %v with PrevLogIndex=%v PrevLogTerm=%v nextIndex=%v entries=%v",
@@ -790,12 +804,11 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 				if commitIndex > rf.commitIndex {
 					rf.commitIndex = commitIndex
 				}
-				//DPrintf("Raft %v: leader sets commitIndex=%v logLen=%v", rf.me, rf.commitIndex, len(rf.log))
 				//DPrintf("(Raft %v -=Commit %+v(%v)=-)\t Majority achieved", rf.me, rf.log[rf.commitIndex].Command, commitIndex)
 
 				for rf.lastApplied < rf.commitIndex {
 					rf.lastApplied++
-					entry := rf.log[rf.lastApplied]
+					entry := rf.logAt(rf.lastApplied)
 					applyMsg := ApplyMsg{}
 					applyMsg.CommandValid = true
 					applyMsg.Command = entry.Command
