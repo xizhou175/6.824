@@ -96,10 +96,40 @@ type Raft struct {
 	logmu   sync.Mutex
 	cond    sync.Cond
 	applyCh *chan ApplyMsg
+
+	lastIncludedIndex int
+	lastIncludedTerm  int
 }
 
 func (rf *Raft) GetId() int {
 	return rf.me
+}
+
+func (rf *Raft) recordEmpty() bool {
+	return rf.getLastIndex() == -1
+}
+
+func (rf *Raft) logEmpty() bool {
+	return len(rf.log) == 0
+}
+
+func (rf *Raft) logAt(idx int) LogEntry {
+	if rf.lastIncludedIndex == -1 {
+		return rf.log[idx]
+	}
+	return rf.log[idx-1-rf.lastIncludedIndex]
+}
+
+func (rf *Raft) getLastIndex() int {
+	return len(rf.log) + rf.lastIncludedIndex
+}
+
+func (rf *Raft) getLastTerm() int {
+	if len(rf.log) == 0 {
+		return rf.lastIncludedTerm
+	} else {
+		return rf.log[len(rf.log)-1].Term
+	}
 }
 
 // return currentTerm and whether this server
@@ -131,6 +161,8 @@ func (rf *Raft) persist() {
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
+	e.Encode(rf.lastIncludedIndex)
+	e.Encode(rf.lastIncludedTerm)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 	//DPrintf("Raft %v: persist() term=%v votedFor=%v logLen=%v", rf.me, rf.currentTerm, rf.votedFor, len(rf.log))
@@ -148,15 +180,21 @@ func (rf *Raft) readPersist(data []byte) {
 	var currentTerm int
 	var votedFor int
 	var log []LogEntry
+	var lastIncludedIndex int
+	var lastIncludedTerm int
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
-		d.Decode(&log) != nil {
+		d.Decode(&log) != nil ||
+		d.Decode(&lastIncludedIndex) != nil ||
+		d.Decode(&lastIncludedTerm) != nil {
 		panic("decoding error!")
 	} else {
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.log = log
-		DPrintf("Raft %v: readPersist() term=%v votedFor=%v logLen=%v", rf.me, rf.currentTerm, rf.votedFor, len(rf.log))
+		rf.lastIncludedIndex = lastIncludedIndex
+		rf.lastIncludedTerm = lastIncludedTerm
+		DPrintf("Raft %v: readPersist() term=%v votedFor=%v logLen=%v, lastIndex=%v, lastTerm=%v", rf.me, rf.currentTerm, rf.votedFor, len(rf.log), rf.getLastIndex(), rf.getLastTerm())
 	}
 	//rf.PrintPersist()
 }
@@ -233,42 +271,44 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	reply.VoteGranted = false
 	var check_log bool = false
+	lastLogIndex := rf.getLastIndex()
 	if args.LastLogIndex >= 0 {
-		if len(rf.log) > 0 {
-			lastLogIndex := len(rf.log) - 1
-			if rf.log[lastLogIndex].Term < args.LastLogTerm || (rf.log[lastLogIndex].Term == args.LastLogTerm && args.LastLogIndex+1 >= len(rf.log)) {
+		if rf.recordEmpty() == false {
+			lastTerm := rf.getLastTerm()
+			if lastTerm < args.LastLogTerm || (lastTerm == args.LastLogTerm && args.LastLogIndex >= lastLogIndex) {
 				check_log = true
 			}
 		} else {
 			check_log = true
 		}
 	} else {
-		if len(rf.log) == 0 {
+		if rf.recordEmpty() == true {
 			check_log = true
 		}
 	}
 
+	// If candidate's term is higher, update our term and reset votedFor
+	if args.Term > rf.currentTerm {
+		rf.state = FOLLOWER
+		rf.currentTerm = args.Term
+		rf.votedFor = -1 // Reset votedFor for the new term
+		rf.persist()
+	}
+
+	// Only grant vote if log is up-to-date AND we haven't voted for someone else
 	if check_log == false {
-		//fmt.Printf("no way for %v to vote for %v(last term %v, lastlogindex %v)!\n", rf.me, args.CandidateId, args.LastLogTerm, args.LastLogIndex)
+		reply.Term = rf.currentTerm
 		return
 	}
 
-	if args.Term > rf.currentTerm {
-		rf.state = FOLLOWER
-		rf.votedFor = args.CandidateId
-		rf.currentTerm = args.Term
-		rf.persist()
-		reply.VoteGranted = true
-	} else if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 		rf.state = FOLLOWER
 		rf.votedFor = args.CandidateId
 		rf.persist()
 		reply.VoteGranted = true
-	} else {
-		//fmt.Printf("server %v refused to vote for %v, has voted for: %v\n", rf.me, args.CandidateId, rf.votedFor)
 	}
 
-	reply.Term = args.Term
+	reply.Term = rf.currentTerm
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -421,14 +461,13 @@ func (rf *Raft) newElection() {
 	rf.state = CANDIDATE
 	rf.votedFor = rf.me
 	rf.currentTerm += 1
+	electionTerm := rf.currentTerm // Store the term for this election
 	//DPrintf("server %v is starting a leader election for term %v\n", rf.me, rf.currentTerm)
 	req := RequestVoteArgs{}
 	req.Term = rf.currentTerm
 	req.CandidateId = rf.me
-	req.LastLogIndex = len(rf.log) - 1
-	if req.LastLogIndex >= 0 {
-		req.LastLogTerm = rf.log[req.LastLogIndex].Term
-	}
+	req.LastLogIndex = rf.getLastIndex()
+	req.LastLogTerm = rf.getLastTerm()
 	rf.persist()
 	rf.mu.Unlock()
 
@@ -446,7 +485,7 @@ func (rf *Raft) newElection() {
 			rf.mu.Lock()
 			gotTheVote := ok && reply.VoteGranted && reply.Term == rf.currentTerm
 			if reply.Term > rf.currentTerm {
-				rf.currentTerm = reply.Term + 1
+				rf.currentTerm = reply.Term
 				rf.persist()
 			}
 			rf.mu.Unlock()
@@ -468,7 +507,11 @@ func (rf *Raft) newElection() {
 
 		// check if we already achieved machority
 		if numGranted > len(rf.peers)/2 {
-			rf.mu.Lock()
+			rf.mu.Lock() // Must still be candidate in the same term to become leader
+			if rf.state != CANDIDATE || rf.currentTerm != electionTerm {
+				rf.mu.Unlock()
+				return
+			}
 			DPrintf("(Raft %v -=Election(Term %v)=-)\t Majority achieved", rf.me, rf.currentTerm)
 
 			rf.state = LEADER
@@ -508,7 +551,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		} else {
 			rf.state = FOLLOWER
 		}
-		if args.PrevLogIndex == -1 {
+		if args.PrevLogIndex < 0 {
 			reply.Success = true
 		} else if len(rf.log) > args.PrevLogIndex {
 			if rf.log[args.PrevLogIndex].Term == args.PrevLogTerm {
@@ -517,17 +560,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		if reply.Success == true {
 			//fmt.Printf("%v currentTerm: %v  args: %+v\n", rf.me, rf.currentTerm, *args)
-			index := 0
 
-			for j := args.PrevLogIndex + 1; j < len(rf.log) && index < len(args.Entries); j++ {
-				rf.log[j] = args.Entries[index]
-				index++
+			// Find where our log conflicts with leader's entries
+			logInsertIndex := args.PrevLogIndex + 1
+			newEntriesIndex := 0
+
+			for logInsertIndex < len(rf.log) && newEntriesIndex < len(args.Entries) {
+				if rf.log[logInsertIndex].Term != args.Entries[newEntriesIndex].Term {
+					// Conflict: truncate log from here
+					break
+				}
+				logInsertIndex++
+				newEntriesIndex++
 			}
 
-			for index < len(args.Entries) {
-				rf.log = append(rf.log, args.Entries[index])
+			// Truncate conflicting entries and append new ones
+			if newEntriesIndex < len(args.Entries) {
+				rf.log = rf.log[:logInsertIndex]
+				rf.log = append(rf.log, args.Entries[newEntriesIndex:]...)
 				rf.persist()
-				index += 1
 			}
 
 			//fmt.Printf("server %v: last %v, rf.commitIndex %v leadercommit %v matchIndex %v\n", rf.me, rf.lastApplied, rf.commitIndex, args.LeaderCommit, args.MatchIndex)
@@ -806,6 +857,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
 
+	rf.lastIncludedIndex = -1
+	rf.lastIncludedTerm = 0
 	//servers = append(servers, rf)
 	// start ticker goroutine to start elections
 	go rf.ticker()
