@@ -1091,7 +1091,8 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		}
 		// send enough to get a snapshot
 		for i := 0; i < SnapShotInterval+1; i++ {
-			cfg.rafts[sender].Start(rand.Int())
+			cfg.rafts[sender].Start(i)
+			//cfg.rafts[sender].Start(rand.Int())
 		}
 		// let applier threads catch up with the Start()'s
 		cfg.one(rand.Int(), servers-1, true)

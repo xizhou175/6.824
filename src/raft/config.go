@@ -214,6 +214,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 					log.Fatalf("decode error\n")
 				}
 				cfg.logs[i][m.SnapshotIndex] = v
+				DPrintf("(Raft %v -=applier=-)\t install snapshot %v, v=%v\n", i, m.SnapshotIndex, v)
 				lastApplied = m.SnapshotIndex
 			}
 			cfg.mu.Unlock()
