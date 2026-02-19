@@ -137,6 +137,16 @@ func (cfg *config) crash1(i int) {
 	}
 }
 
+func (cfg *config) printRaftLogs() {
+	for i := 0; i < len(cfg.rafts); i++ {
+		if i == 0 {
+			fmt.Printf("=================\n")
+		}
+		fmt.Printf("Server %v log(len: %v): %v\n", i, len(cfg.rafts[i].log), cfg.rafts[i].log)
+		fmt.Printf("===============\n")
+	}
+}
+
 func (cfg *config) printLog(i int) {
 	fmt.Printf("%v: log %v\n", i, cfg.logs[i])
 }
@@ -569,12 +579,14 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {
+				cfg.printRaftLogs()
 				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 			}
 		} else {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
+	cfg.printRaftLogs()
 	cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	return -1
 }

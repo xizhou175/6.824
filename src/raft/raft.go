@@ -168,6 +168,16 @@ func (rf *Raft) getLastTerm() int {
 	}
 }
 
+func (rf *Raft) getTermAt(idx int) int {
+	Term := 0
+	if idx == rf.lastIncludedIndex {
+		Term = rf.lastIncludedTerm
+	} else if idx > rf.lastIncludedIndex {
+		Term = rf.logAt(idx).Term
+	}
+	return Term
+}
+
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
@@ -253,6 +263,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 }
 
 func (rf *Raft) leaderSendSnapshot(server int) {
+	//DPrintf("server %v: leaderSendSnapshot to server %v, lastIncludedIndex=%v, lastIncludedTerm=%v\n", rf.me, server, rf.lastIncludedIndex, rf.lastIncludedTerm)
 	rf.mu.Lock()
 	args := SnapshotArgs{
 		Term:              rf.currentTerm,
@@ -310,20 +321,19 @@ func (rf *Raft) InstallSnapshot(args *SnapshotArgs, reply *SnapshotReply) {
 	}
 	rf.lastIncludedIndex = args.LastIncludedIndex
 	rf.lastIncludedTerm = args.LastIncludedTerm
+	DPrintf("(InstallSnapshot)server %v: log before snapshot: %v", rf.me, rf.log)
 	rf.log = temp
 	rf.snapshot = args.Data
 
-	DPrintf("Raft %v: Snapshot at index=%v, lastIncludedIndex=%v, lastIncludedTerm=%v, logLen=%v",
-		rf.me, index+1, rf.lastIncludedIndex, rf.lastIncludedTerm, len(rf.log))
-	DPrintf("Raft %v: log after snapshot: %v", rf.me, rf.log)
+	DPrintf("(InstallSnapshot)server %v: Snapshot at index=%v, lastIncludedIndex=%v, lastIncludedTerm=%v, logLen=%v",
+		rf.me, index, rf.lastIncludedIndex, rf.lastIncludedTerm, len(rf.log))
+	DPrintf("(InstallSnapshot)server %v: log after snapshot: %v", rf.me, rf.log)
 
 	if index > rf.commitIndex {
 		rf.commitIndex = index
 	}
-	if index > rf.lastApplied {
-		DPrintf("server %v: lastApplied=%v", rf.me, rf.lastApplied)
-		rf.lastApplied = index
-	}
+	// NOTE: Don't modify lastApplied here - let the applier do it
+	// to avoid race with entries already being applied
 	rf.persister.SaveStateAndSnapshot(rf.persistState(), rf.snapshot)
 	// receiver implementation 8: signal applier to send snapshot to state machine
 	rf.pendingSnapshot = true
@@ -360,12 +370,13 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.lastIncludedTerm = rf.logAt(logIndex).Term
 
 	// Trim the log - keep entries after logIndex
+	DPrintf("(Snapshot)server %v: lastIncludedIndex=%v lastIncludedTerm=%v log before snapshot: %v", rf.me, rf.lastIncludedIndex, rf.lastIncludedTerm, rf.log)
 	rf.log = rf.logSince(logIndex + 1)
 	rf.lastIncludedIndex = logIndex
 
-	DPrintf("Raft %v: Snapshot at index=%v, lastIncludedIndex=%v, lastIncludedTerm=%v, logLen=%v",
+	DPrintf("(Snapshot)Server %v: Snapshot at index=%v, lastIncludedIndex=%v, lastIncludedTerm=%v, logLen=%v",
 		rf.me, index, rf.lastIncludedIndex, rf.lastIncludedTerm, len(rf.log))
-	DPrintf("Raft %v: log after snapshot: %v", rf.me, rf.log)
+	DPrintf("(Snapshot)Server %v: log after snapshot: %v", rf.me, rf.log)
 	rf.persister.SaveStateAndSnapshot(rf.persistState(), snapshot)
 }
 
@@ -691,7 +702,7 @@ func (rf *Raft) newElection() {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	//DPrintf("Raft %v received AppendEntries %+v from leader %v for term %v\n", rf.me, args, args.LeaderId, args.Term)
+	//DPrintf("Server %v received AppendEntries %+v from leader %v for term %v\n", rf.me, args, args.LeaderId, args.Term)
 	reply.Success = false
 
 	if args.Term < rf.currentTerm {
@@ -707,14 +718,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		if args.PrevLogIndex < 0 {
 			reply.Success = true
-		} else if args.PrevLogIndex <= rf.lastIncludedIndex {
+		} else if args.PrevLogIndex < rf.lastIncludedIndex {
 			reply.Success = false
 			reply.Lag = true
 			reply.Term = rf.currentTerm
 			rf.lastAE = time.Now()
 			return
 		} else if rf.getLastIndex() >= args.PrevLogIndex {
-			if rf.logAt(args.PrevLogIndex).Term == args.PrevLogTerm {
+			if rf.getTermAt(args.PrevLogIndex) == args.PrevLogTerm {
 				reply.Success = true
 			}
 		}
@@ -741,6 +752,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				rf.persist()
 			}
 
+			//DPrintf("server %v: prevIndex: %v args.Entries=%v\nlog: %v", rf.me, args.PrevLogIndex, args.Entries, rf.log)
+
 			//fmt.Printf("server %v: last %v, rf.commitIndex %v leadercommit %v matchIndex %v\n", rf.me, rf.lastApplied, rf.commitIndex, args.LeaderCommit, args.MatchIndex)
 			if rf.commitIndex < args.LeaderCommit && args.MatchIndex > rf.lastApplied {
 				if args.LeaderCommit < rf.getLastIndex() {
@@ -749,6 +762,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 					rf.commitIndex = rf.getLastIndex()
 				}
 				// Signal the applier goroutine to apply committed entries
+				//DPrintf("server %v: commitIndex updated to %v, lastApplied %v\nlog: %v", rf.me, rf.commitIndex, rf.lastApplied, rf.log)
 				go rf.signalApplier()
 			}
 		} else if len(args.Entries) != 0 {
@@ -756,8 +770,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			reply.XIndex = -1
 			if rf.getLastIndex()+1 <= args.PrevLogIndex {
 				reply.LogLenth = rf.getLastIndex() + 1
-			} else if rf.logAt(args.PrevLogIndex).Term != args.PrevLogTerm {
-				reply.XTerm = rf.logAt(args.PrevLogIndex).Term
+			} else if rf.getTermAt(args.PrevLogIndex) != args.PrevLogTerm {
+				reply.XTerm = rf.getTermAt(args.PrevLogIndex)
 				reply.XIndex = args.PrevLogIndex
 				for i := args.PrevLogIndex; i >= 0; i-- {
 					if rf.logAt(i).Term == reply.XTerm {
@@ -804,11 +818,12 @@ func (rf *Raft) sendHeartBeats() {
 			req.PrevLogIndex = rf.nextIndex[index] - 1
 			req.MatchIndex = rf.matchIndex[index]
 			if req.PrevLogIndex >= 0 {
-				if req.PrevLogIndex == rf.lastIncludedIndex {
-					req.PrevLogTerm = rf.lastIncludedTerm
-				} else {
-					req.PrevLogTerm = rf.logAt(req.PrevLogIndex).Term
-				}
+				//if req.PrevLogIndex == rf.lastIncludedIndex {
+				//	req.PrevLogTerm = rf.lastIncludedTerm
+				//} else {
+				//	req.PrevLogTerm = rf.logAt(req.PrevLogIndex).Term
+				//}
+				req.PrevLogTerm = rf.getTermAt(req.PrevLogIndex)
 			}
 			rf.mu.Unlock()
 
@@ -836,17 +851,18 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 	// length of rf.log is at least 1
 
 	all_req.Entries = append(all_req.Entries, rf.logAt(commitIndex))
-
+	//DPrintf("sendLogEntries: server %v, commitIndex %v, entries: %v\n", rf.me, commitIndex, all_req.Entries)
 	// Don't reset nextIndex for all peers - only set our own
 	rf.nextIndex[rf.me] = commitIndex + 1
 
 	all_req.PrevLogIndex = commitIndex - 1
 	if all_req.PrevLogIndex >= 0 {
-		if all_req.PrevLogIndex == rf.lastIncludedIndex {
+		/*if all_req.PrevLogIndex == rf.lastIncludedIndex {
 			all_req.PrevLogTerm = rf.lastIncludedTerm
 		} else {
 			all_req.PrevLogTerm = rf.logAt(all_req.PrevLogIndex).Term
-		}
+		}*/
+		all_req.PrevLogTerm = rf.getTermAt(all_req.PrevLogIndex)
 	}
 	all_req.LeaderCommit = -1
 	rf.mu.Unlock()
@@ -865,6 +881,12 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 				commitCh <- 0
 				return
 			}
+			//DPrintf("server %v, req.Entries: %v, matchIndex: %v commitIndex %v", index, all_req.Entries, rf.matchIndex[index], commitIndex)
+			//if rf.matchIndex[index] >= commitIndex {
+			//	rf.mu.Unlock()
+			//	commitCh <- 0
+			//	return
+			//}
 			rf.mu.Unlock()
 
 			reply := AppendEntriesReply{}
@@ -905,8 +927,6 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 					break
 				} else {
 					// Log the failure and the reply for debugging backup logic
-					//DPrintf("Raft %v: AppendEntries to %v failed; reply={Term:%v Success:%v XTerm:%v XIndex:%v LogLen:%v} nextIndex(before)=%v",
-					//	rf.me, index, reply.Term, reply.Success, reply.XTerm, reply.XIndex, reply.LogLenth, rf.nextIndex[index])
 
 					if reply.XTerm == -1 {
 						// case 3: The follower's log is too short to contain the conflicting entry,
@@ -914,7 +934,7 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 						req.PrevLogIndex = reply.LogLenth - 1
 					} else if reply.Lag == true {
 						// In this case, snapshot is ahead, we need to reset next index
-						req.PrevLogIndex = rf.getLastIndex()
+						req.PrevLogIndex = rf.getLastIndex() - 1
 					} else {
 						has_xterm := false
 						last_index_xterm := -1
@@ -957,15 +977,17 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 					req.Entries = rf.logSince(nextIndex)
 
 					if req.PrevLogIndex >= 0 {
-						if req.PrevLogIndex == rf.lastIncludedIndex {
+						/*if req.PrevLogIndex == rf.lastIncludedIndex {
 							req.PrevLogTerm = rf.lastIncludedTerm
 						} else if req.PrevLogIndex > rf.lastIncludedIndex {
 							req.PrevLogTerm = rf.logAt(req.PrevLogIndex).Term
-						}
+						}*/
+						req.PrevLogTerm = rf.getTermAt(req.PrevLogIndex)
 					}
-
+					//DPrintf("Raft %v: AppendEntries to %v failed; reply=%+v nextIndex(before)=%v, initial entries=%v",
+					//	rf.me, index, reply, rf.nextIndex[index], all_req.Entries)
 					//DPrintf("Raft %v: retrying AppendEntries to %v with PrevLogIndex=%v PrevLogTerm=%v nextIndex=%v entries=%v",
-					//	rf.me, index, req.PrevLogIndex, req.PrevLogTerm, nextIndex, len(req.Entries))
+					//	rf.me, index, req.PrevLogIndex, req.PrevLogTerm, nextIndex, req.Entries)
 
 					rf.mu.Unlock()
 				}
@@ -991,6 +1013,7 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 				rf.mu.Unlock()
 
 				// Signal the applier goroutine to apply committed entries
+				//DPrintf("server %v(LEADER): commitIndex updated to %v, lastApplied %v\nlog: %v", rf.me, rf.commitIndex, rf.lastApplied, rf.log)
 				rf.signalApplier()
 
 				break
@@ -1025,6 +1048,11 @@ func (rf *Raft) applier() {
 				SnapshotTerm:  rf.pendingSnapshotTerm,
 				SnapshotIndex: rf.pendingSnapshotIdx,
 			}
+			// Update lastApplied to snapshot index (0-based)
+			snapshotIdx := rf.pendingSnapshotIdx - 1 // convert to 0-based
+			//if snapshotIdx > rf.lastApplied {
+			rf.lastApplied = snapshotIdx
+			//}
 			rf.pendingSnapshot = false
 			rf.pendingSnapshotData = nil
 			rf.mu.Unlock()
@@ -1048,6 +1076,7 @@ func (rf *Raft) applier() {
 
 		for _, msg := range toApply {
 			*(rf.applyCh) <- msg
+			//DPrintf("Raft %v applied command at index %v: %v\n", rf.me, msg.CommandIndex-1, msg.Command)
 		}
 	}
 }

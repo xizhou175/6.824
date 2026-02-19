@@ -1073,7 +1073,9 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 	cfg.one(rand.Int(), servers, true)
 	leader1 := cfg.checkOneLeader()
 
+	num := 1000
 	for i := 0; i < iters; i++ {
+		DPrintf("---- iteration %v ----\n", i)
 		victim := (leader1 + 1) % servers
 		sender := leader1
 		if i%3 == 1 {
@@ -1095,7 +1097,8 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			//cfg.rafts[sender].Start(rand.Int())
 		}
 		// let applier threads catch up with the Start()'s
-		cfg.one(rand.Int(), servers-1, true)
+		//cfg.one(rand.Int(), servers-1, true)
+		cfg.one(num+i, servers-1, true)
 
 		if cfg.LogSize() >= MAXLOGSIZE {
 			cfg.t.Fatalf("Log size too large")
