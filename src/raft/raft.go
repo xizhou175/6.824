@@ -717,6 +717,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.state = FOLLOWER
 		}
 		if args.PrevLogIndex < 0 {
+			if args.PrevLogIndex < -1 {
+				args.PrevLogIndex = -1
+			}
 			reply.Success = true
 		} else if args.PrevLogIndex < rf.lastIncludedIndex {
 			reply.Success = false
@@ -773,7 +776,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			} else if rf.getTermAt(args.PrevLogIndex) != args.PrevLogTerm {
 				reply.XTerm = rf.getTermAt(args.PrevLogIndex)
 				reply.XIndex = args.PrevLogIndex
-				for i := args.PrevLogIndex; i >= 0; i-- {
+				for i := args.PrevLogIndex; i > rf.lastIncludedIndex; i-- {
 					if rf.logAt(i).Term == reply.XTerm {
 						reply.XIndex = i
 					} else {
@@ -984,10 +987,10 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 						}*/
 						req.PrevLogTerm = rf.getTermAt(req.PrevLogIndex)
 					}
-					//DPrintf("Raft %v: AppendEntries to %v failed; reply=%+v nextIndex(before)=%v, initial entries=%v",
-					//	rf.me, index, reply, rf.nextIndex[index], all_req.Entries)
-					//DPrintf("Raft %v: retrying AppendEntries to %v with PrevLogIndex=%v PrevLogTerm=%v nextIndex=%v entries=%v",
-					//	rf.me, index, req.PrevLogIndex, req.PrevLogTerm, nextIndex, req.Entries)
+					DPrintf("Raft %v: AppendEntries to %v failed; reply=%+v nextIndex(before)=%v, initial entries=%v",
+						rf.me, index, reply, rf.nextIndex[index], all_req.Entries)
+					DPrintf("Raft %v: retrying AppendEntries to %v with PrevLogIndex=%v PrevLogTerm=%v nextIndex=%v entries=%v",
+						rf.me, index, req.PrevLogIndex, req.PrevLogTerm, nextIndex, req.Entries)
 
 					rf.mu.Unlock()
 				}
