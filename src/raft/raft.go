@@ -717,13 +717,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.state = FOLLOWER
 		}
 		if args.PrevLogIndex < 0 {
-			if args.PrevLogIndex < -1 {
-				args.PrevLogIndex = -1
-			}
+			//if args.PrevLogIndex < -1 {
+			//	args.PrevLogIndex = -1
+			//}
 			reply.Success = true
 		} else if args.PrevLogIndex < rf.lastIncludedIndex {
 			reply.Success = false
 			reply.Lag = true
+			reply.LogLenth = rf.lastIncludedIndex + 1 // Tell leader where our snapshot ends
 			reply.Term = rf.currentTerm
 			rf.lastAE = time.Now()
 			return
@@ -931,13 +932,14 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 				} else {
 					// Log the failure and the reply for debugging backup logic
 
-					if reply.XTerm == -1 {
+					if reply.Lag == true {
+						// Follower's snapshot is ahead of PrevLogIndex
+						// Use LogLenth (which is lastIncludedIndex + 1) to know where to start
+						req.PrevLogIndex = reply.LogLenth - 1
+					} else if reply.XTerm == -1 {
 						// case 3: The follower's log is too short to contain the conflicting entry,
 						// so it should set nextIndex to the follower's log length
 						req.PrevLogIndex = reply.LogLenth - 1
-					} else if reply.Lag == true {
-						// In this case, snapshot is ahead, we need to reset next index
-						req.PrevLogIndex = rf.getLastIndex() - 1
 					} else {
 						has_xterm := false
 						last_index_xterm := -1
@@ -987,10 +989,10 @@ func (rf *Raft) sendLogEntries(commitIndex int) {
 						}*/
 						req.PrevLogTerm = rf.getTermAt(req.PrevLogIndex)
 					}
-					DPrintf("Raft %v: AppendEntries to %v failed; reply=%+v nextIndex(before)=%v, initial entries=%v",
-						rf.me, index, reply, rf.nextIndex[index], all_req.Entries)
-					DPrintf("Raft %v: retrying AppendEntries to %v with PrevLogIndex=%v PrevLogTerm=%v nextIndex=%v entries=%v",
-						rf.me, index, req.PrevLogIndex, req.PrevLogTerm, nextIndex, req.Entries)
+					//DPrintf("Raft %v: AppendEntries to %v failed; reply=%+v nextIndex(before)=%v, initial entries=%v",
+					//	rf.me, index, reply, rf.nextIndex[index], all_req.Entries)
+					//DPrintf("Raft %v: retrying AppendEntries to %v with PrevLogIndex=%v PrevLogTerm=%v nextIndex=%v entries=%v",
+					//	rf.me, index, req.PrevLogIndex, req.PrevLogTerm, nextIndex, req.Entries)
 
 					rf.mu.Unlock()
 				}

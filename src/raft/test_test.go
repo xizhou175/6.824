@@ -1082,14 +1082,19 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			sender = (leader1 + 1) % servers
 			victim = leader1
 		}
+		DPrintf("sender: %v, victim: %v\n", sender, victim)
 
 		if disconnect {
 			cfg.disconnect(victim)
-			cfg.one(rand.Int(), servers-1, true)
+			DPrintf("Disconnected %v\n", victim)
+			//cfg.one(rand.Int(), servers-1, true)
+			cfg.one(10000+i, servers-1, true)
 		}
 		if crash {
 			cfg.crash1(victim)
-			cfg.one(rand.Int(), servers-1, true)
+			DPrintf("Crashed %v\n", victim)
+			//cfg.one(rand.Int(), servers-1, true)
+			cfg.one(20000+i, servers-1, true)
 		}
 		// send enough to get a snapshot
 		for i := 0; i < SnapShotInterval+1; i++ {
@@ -1107,13 +1112,15 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			// reconnect a follower, who maybe behind and
 			// needs to rceive a snapshot to catch up.
 			cfg.connect(victim)
-			cfg.one(rand.Int(), servers, true)
+			DPrintf("Reconnected %v\n", victim)
+			cfg.one(30000+i, servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
 		if crash {
 			cfg.start1(victim, cfg.applierSnap)
 			cfg.connect(victim)
-			cfg.one(rand.Int(), servers, true)
+			DPrintf("(after crash)Reconnected %v\n", victim)
+			cfg.one(40000+i, servers, true)
 			leader1 = cfg.checkOneLeader()
 		}
 	}
